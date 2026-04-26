@@ -43,7 +43,7 @@ if __name__ == '__main__':  # Точка входа при запуске это
         sessionend=dt.time(0, 0),  # Для дневных данных и выше подставляется время окончания сессии. Чтобы совпадало с историей, нужно поставить закрытие на 00:00
     )
 
-    fromdate = dt.datetime.utcnow() - dt.timedelta(days=15)  # берем данные за последние 15 дней
+    fromdate = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=15)  # берем данные за последние 15 дней
     d2 = store.getdata(timeframe=_t, compression=_c, dataname=symbol, fromdate=fromdate, live_bars=False)  # Исторические данные по самому меньшему временному интервалу
 
     cerebro.rolloverdata(d1, d2, name=symbol)  # Склеенный тикер
