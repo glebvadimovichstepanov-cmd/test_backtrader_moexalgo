@@ -7,10 +7,10 @@ from .moexalgo_feed import MoexAlgoData
 class MoexAlgoStore(object):
     """Класс получения данных по тикеру"""
     _GRANULARITIES = {  # Все временнЫе интервалы
-        (TimeFrame.Minutes, 1): '1m',
-        (TimeFrame.Minutes, 5): '5m',  # need to be resampled from 1m
-        (TimeFrame.Minutes, 10): '10m',
-        (TimeFrame.Minutes, 30): '30m',  # need to be resampled from 10m
+        (TimeFrame.Minutes, 1): '1min',
+        (TimeFrame.Minutes, 5): '5min',  # need to be resampled from 1m
+        (TimeFrame.Minutes, 10): '10min',
+        (TimeFrame.Minutes, 30): '30min',  # need to be resampled from 10m
         (TimeFrame.Minutes, 60): '1h',
         (TimeFrame.Days, 1): '1D',
         (TimeFrame.Weeks, 1): '1W',

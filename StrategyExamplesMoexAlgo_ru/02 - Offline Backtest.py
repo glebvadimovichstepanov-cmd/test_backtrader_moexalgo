@@ -156,7 +156,7 @@ if __name__ == '__main__':
     cerebro.addanalyzer(btanalyzers.TradeAnalyzer, _name='TradeAnalyzer')
 
     results = cerebro.run()  # Запуск торговой системы
-    cerebro.plot()  # Рисуем график
+    # cerebro.plot()  # Рисуем график
 
     thestrat = results[0]
 

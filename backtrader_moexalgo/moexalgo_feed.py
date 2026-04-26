@@ -147,7 +147,7 @@ class MoexAlgoData(DataBase):
                                      'imbalance_val': imbalance_val, 'vwap_b': vwap_b, 'vwap_s': vwap_s,
                                      'vwap_b_1mio': vwap_b_1mio, 'vwap_s_1mio': vwap_s_1mio}
 
-            self.lines.datetime[0] = date2num(timestamp)
+            self.lines.datetime[0] = date2num(timestamp) if isinstance(timestamp, datetime) else date2num(datetime.fromisoformat(str(timestamp).replace(' ', 'T')))
             self.lines.open[0] = open_
             self.lines.high[0] = high
             self.lines.low[0] = low
@@ -289,14 +289,14 @@ class MoexAlgoData(DataBase):
         # проверяем, нужно ли делать resample
         resample = False
         interval_to = None
-        if interval == '5m':
+        if interval == '5min':
             resample = True
-            interval = '1m'
+            interval = '1min'
             interval_to = '5T'  # is equal for '5m (pandas)
 
-        if interval == '30m':
+        if interval == '30min':
             resample = True
-            interval = '10m'
+            interval = '10min'
             interval_to = '30T'  # is equal for '30m (pandas)
 
         df = pd.DataFrame()
@@ -359,14 +359,14 @@ class MoexAlgoData(DataBase):
         # проверяем, нужно ли делать resample
         resample = False
         interval_to = None
-        if interval == '10m':
+        if interval == '10min':
             resample = True
-            interval = '5m'
+            interval = '5min'
             interval_to = '10T'  # is equal for '10m (pandas)
 
-        if interval == '30m':
+        if interval == '30min':
             resample = True
-            interval = '5m'
+            interval = '5min'
             interval_to = '30T'  # is equal for '30m (pandas)
 
         df = pd.DataFrame()
