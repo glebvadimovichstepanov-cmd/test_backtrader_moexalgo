@@ -8,7 +8,7 @@ from backtrader_moexalgo.moexalgo_store import MoexAlgoStore  # Хранилищ
 
 # пример live торговли для Tbank (Тинькофф Инвестиции)
 from t_tech.invest import Client  # Коннект к Tbank API - для выставления заявок на покупку/продажу
-from t_tech.invest import OrderDirection, OrderType, TimeInForceType, InstrumentIdType
+from t_tech.invest import OrderDirection, OrderType, TimeInForceType
 
 # Токен берем из переменной окружения INVEST_TOKEN
 INVEST_TOKEN = os.getenv('INVEST_TOKEN', 't.ZLtpCN0pOiGj8WbOU0xxGgpCWxBH5vmnYH-hzvgXQesS04yGMtEiw1tzJevGZox1r6nVMXi0z0QMO3BaRH7lBA')
@@ -113,7 +113,6 @@ class RSIStrategy(bt.Strategy):
                         # Выставляем заявку на покупку по рынку
                         response = client.orders.post_order(
                             instrument_id=ticker,
-                            instrument_id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_TICKER,
                             quantity=1,
                             direction=OrderDirection.ORDER_DIRECTION_BUY,
                             account_id=self.account_id,
@@ -142,7 +141,6 @@ class RSIStrategy(bt.Strategy):
                                 # Выставляем заявку на продажу по рынку
                                 response = client.orders.post_order(
                                     instrument_id=ticker,
-                                    instrument_id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_TICKER,
                                     quantity=1,
                                     direction=OrderDirection.ORDER_DIRECTION_SELL,
                                     account_id=self.account_id,
