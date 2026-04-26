@@ -40,8 +40,11 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS'):
     pnl = final_cash - 100000.0
     pnl_percent = (pnl / 100000.0) * 100
     
-    # Считаем количество сделок
-    trades_count = len(strat.trades)
+    # Считаем количество сделок через analyzer или trades observer
+    trades_count = len([t for t in strat._trades]) if hasattr(strat, '_trades') else 0
+    if trades_count == 0:
+        # Альтернативный способ - через observers
+        trades_count = len(cerebro.observer.trades) if hasattr(cerebro, 'observer') and hasattr(cerebro.observer, 'trades') else 0
     
     return {
         'date': date_start.date(),

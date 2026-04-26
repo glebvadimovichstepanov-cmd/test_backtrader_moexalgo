@@ -4,20 +4,21 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
-*.egg-info/
-
-# Dependencies
-.venv/
-venv/
-.env
-.env.local
-.env.*
 
 # Logs and temp files
 *.log
 *.tmp
 
+# Environment
+.env
+.env.local
+*.env.*
+
 # Editors
 .vscode/
 .idea/
+
+# Dependencies
+.venv/
+venv/
 ```
