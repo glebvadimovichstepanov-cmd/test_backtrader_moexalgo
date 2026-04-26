@@ -3,11 +3,8 @@ import datetime
 import sys
 import os
 
-# Добавляем путь к папке со стратегиями
-sys.path.append(os.path.join(os.path.dirname(__file__), 'StrategyExamplesMoexAlgo_ru'))
-
 from strategy_mc_pl import StrategyMCWithTPSL
-from backtrader_moexalgo.moexalgo_feed import MoexAlgoData
+from backtrader_moexalgo.moexalgo_store import MoexAlgoStore
 
 def run_daily_backtest(date_start, date_end, symbol='SNGS'):
     """Запуск бэктеста для одного дня"""
@@ -16,14 +13,16 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS'):
     # Добавляем стратегию
     cerebro.addstrategy(StrategyMCWithTPSL)
     
-    # Настраиваем данные
-    data = MoexAlgoData(
-        symbol=symbol,
+    # Создаем хранилище и получаем данные
+    store = MoexAlgoStore()
+    data = store.getdata(
+        dataname=symbol,
         fromdate=date_start,
         todate=date_end,
         timeframe=bt.TimeFrame.Minutes,
         compression=5,
-        metric='tradestats'  # Используем расширенные данные для интрадея
+        metric='tradestats',  # Используем расширенные данные для интрадея
+        live_bars=False
     )
     cerebro.adddata(data)
     
@@ -108,32 +107,36 @@ def main():
     
     # Итоговая статистика
     print("-" * 60)
-    print("\n=== ИТОГОВАЯ СТАТИСТИКА ЗА 30 ДНЕЙ ===")
-    print(f"Общий PnL: {total_pnl:.2f} руб.")
-    print(f"Общий доход (%): {(total_pnl / (100000.0 * len(daily_results))) * 100:.2f}% (от среднего дневного депозита)")
-    print(f"Всего сделок: {total_trades}")
-    print(f"Торговых дней: {len(daily_results)}")
-    print(f"Прибыльных дней: {winning_days} ({(winning_days/len(daily_results)*100):.1f}%)")
-    print(f"Убыточных дней: {losing_days} ({(losing_days/len(daily_results)*100):.1f}%)")
-    
-    if total_trades > 0:
-        avg_trade_pnl = total_pnl / total_trades
-        print(f"Средний PnL на сделку: {avg_trade_pnl:.2f} руб.")
-    
-    # Расчет максимального просадки (упрощенно)
-    peak = 100000.0
-    max_drawdown = 0.0
-    current_cash = 100000.0
-    
-    for res in daily_results:
-        current_cash += res['pnl']
-        if current_cash > peak:
-            peak = current_cash
-        drawdown = (peak - current_cash) / peak * 100
-        if drawdown > max_drawdown:
-            max_drawdown = drawdown
-    
-    print(f"Максимальная просадка: {max_drawdown:.2f}%")
+    if len(daily_results) > 0:
+        print("\n=== ИТОГОВАЯ СТАТИСТИКА ЗА 30 ДНЕЙ ===")
+        print(f"Общий PnL: {total_pnl:.2f} руб.")
+        print(f"Общий доход (%): {(total_pnl / (100000.0 * len(daily_results))) * 100:.2f}% (от среднего дневного депозита)")
+        print(f"Всего сделок: {total_trades}")
+        print(f"Торговых дней: {len(daily_results)}")
+        print(f"Прибыльных дней: {winning_days} ({(winning_days/len(daily_results)*100):.1f}%)")
+        print(f"Убыточных дней: {losing_days} ({(losing_days/len(daily_results)*100):.1f}%)")
+        
+        if total_trades > 0:
+            avg_trade_pnl = total_pnl / total_trades
+            print(f"Средний PnL на сделку: {avg_trade_pnl:.2f} руб.")
+        
+        # Расчет максимального просадки (упрощенно)
+        peak = 100000.0
+        max_drawdown = 0.0
+        current_cash = 100000.0
+        
+        for res in daily_results:
+            current_cash += res['pnl']
+            if current_cash > peak:
+                peak = current_cash
+            drawdown = (peak - current_cash) / peak * 100
+            if drawdown > max_drawdown:
+                max_drawdown = drawdown
+        
+        print(f"Максимальная просадка: {max_drawdown:.2f}%")
+    else:
+        print("\n=== НЕТ ДАННЫХ ДЛЯ АНАЛИЗА ===")
+        print("Возможно, указаны будущие даты или нет доступа к API MOEX")
     print("=" * 60)
 
 if __name__ == '__main__':

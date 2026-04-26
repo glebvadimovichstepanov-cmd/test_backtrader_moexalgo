@@ -1,89 +1,50 @@
-# Python
+# Compiled and build artifacts
+*.pyc
 __pycache__/
-*.py[cod]
-*$py.class
+*.o
+*.obj
+*.out
+*.class
+*.dll
 *.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
+*.a
+*.exe
 
-# Virtual environments
-venv/
-ENV/
-env.bak/
+# Dependencies
 .venv/
+venv/
+.env
+.env.local
+.env.*
 
-# IDE
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+*.swo
+
+# Editors
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# Logs
-*.log
-
-# Environment
-.env
-.env.local
-.env.*
-
-# Testing
-.coverage
-htmlcov/
-.coverage.*
-.cache
-.pytest_cache/
-.hypothesis/
-
-# Distribution / packaging
-.Python
+# Build systems
 build/
-develop-eggs/
 dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-pip-wheel-metadata/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
+target/
+.gradle/
+.mypy_cache/
+.pytest_cache/
+coverage/
+htmlcov/
+.coverage
 
-# System
+# System files
 .DS_Store
 Thumbs.db
 
-# Compiled
-*.class
-*.o
-*.obj
-*.out
-*.dll
-*.so
-*.a
-*.dylib
-
-# Compressed
+# Compressed files
 *.zip
 *.gz
 *.tar
