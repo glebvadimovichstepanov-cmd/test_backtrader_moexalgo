@@ -1,42 +1,43 @@
-```
-# Compiled Python files
+```python
+# Compiled and binary files
 *.pyc
 __pycache__/
+*.o
+*.obj
+*.so
+*.dll
+*.exe
 
-# Environment files
+# Dependencies
+venv/
+.venv/
 .env
 .env.local
 *.env.*
 
-# Logs
+# Logs and temp files
 *.log
-
-# Temporary files
 *.tmp
+*.swp
 
-# Editor/IDE files
+# Editors
 .vscode/
 .idea/
-*.swp
-*.swo
-
-# Dependencies
-node_modules/
-venv/
-.venv/
-.mypy_cache/
-.pytest_cache/
-.coverage
-coverage/
-htmlcov/
 
 # Build artifacts
 dist/
 build/
 target/
-.gradle/
+*.out
 
-# System files
+# Testing and coverage
+.coverage
+coverage/
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+
+# OS specific
 .DS_Store
 Thumbs.db
 ```
