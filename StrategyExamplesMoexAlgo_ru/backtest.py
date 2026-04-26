@@ -1,5 +1,11 @@
 import backtrader as bt
 import datetime
+import sys
+import os
+
+# Добавляем путь к папке со стратегиями
+sys.path.append(os.path.join(os.path.dirname(__file__), 'StrategyExamplesMoexAlgo_ru'))
+
 from strategy_mc_pl import StrategyMCWithTPSL
 from backtrader_moexalgo.moexalgo_feed import MoexAlgoData
 
