@@ -60,12 +60,12 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS'):
 
 def main():
     print("=" * 60)
-    print("БЭКТЕСТ СТРАТЕГИИ SNGS Channel Macro v4 (30 дней)")
+    print("БЭКТЕСТ СТРАТЕГИИ SNGS Channel Macro v4 (365 дней)")
     print("=" * 60)
     
-    # Определяем диапазон дат (последние 30 календарных дней)
+    # Определяем диапазон дат (последние 365 календарных дней)
     end_date = datetime.datetime.now()
-    start_date = end_date - datetime.timedelta(days=30)
+    start_date = end_date - datetime.timedelta(days=365)
     
     # Для интрадея лучше тестировать по отдельным дням
     # Генерируем список торговых дней (упрощенно - каждый день)
@@ -113,7 +113,7 @@ def main():
     # Итоговая статистика
     print("-" * 60)
     if len(daily_results) > 0:
-        print("\n=== ИТОГОВАЯ СТАТИСТИКА ЗА 30 ДНЕЙ ===")
+        print("\n=== ИТОГОВАЯ СТАТИСТИКА ЗА 365 ДНЕЙ ===")
         print(f"Общий PnL: {total_pnl:.2f} руб.")
         print(f"Общий доход (%): {(total_pnl / (100000.0 * len(daily_results))) * 100:.2f}% (от среднего дневного депозита)")
         print(f"Всего сделок: {total_trades}")
@@ -139,6 +139,25 @@ def main():
                 max_drawdown = drawdown
         
         print(f"Максимальная просадка: {max_drawdown:.2f}%")
+        
+        # Расчет Sharpe ratio (упрощенно, на основе дневных доходностей)
+        if len(daily_results) > 1:
+            daily_returns = [r['pnl_percent'] for r in daily_results]
+            import statistics
+            avg_return = statistics.mean(daily_returns)
+            std_return = statistics.stdev(daily_returns) if len(daily_returns) > 1 else 1
+            sharpe_ratio = (avg_return / std_return) * (252 ** 0.5) if std_return > 0 else 0
+            print(f"Sharpe Ratio (annualized): {sharpe_ratio:.2f}")
+            
+            # Profit Factor
+            gross_profit = sum(r['pnl'] for r in daily_results if r['pnl'] > 0)
+            gross_loss = abs(sum(r['pnl'] for r in daily_results if r['pnl'] < 0))
+            profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
+            print(f"Profit Factor: {profit_factor:.2f}")
+            
+            # Win Rate
+            win_rate = winning_days / len(daily_results) * 100
+            print(f"Win Rate: {win_rate:.1f}%")
     else:
         print("\n=== НЕТ ДАННЫХ ДЛЯ АНАЛИЗА ===")
         print("Возможно, указаны будущие даты или нет доступа к API MOEX")
