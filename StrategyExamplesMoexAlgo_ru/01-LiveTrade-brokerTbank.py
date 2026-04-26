@@ -12,7 +12,7 @@ from t_tech.invest import Client  # Коннект к Tbank API - для выс�
 from t_tech.invest import OrderDirection, OrderType, TimeInForceType
 
 # Токен берем из переменной окружения INVEST_TOKEN
-INVEST_TOKEN = os.getenv('INVEST_TOKEN', 't.ZLtpCN0pOiGj8WbOU0xxGgpCWxBH5vmnYH-hzvgXQesS04yGMtEiw1tzJevGZox1r6nVMXi0z0QMO3BaRH7lBA')
+INVEST_TOKEN = os.getenv('INVEST_TOKEN')
 if not INVEST_TOKEN:
     raise ValueError("Переменная окружения INVEST_TOKEN не установлена. Установите её перед запуском скрипта.")
 
@@ -20,6 +20,25 @@ if not INVEST_TOKEN:
 INVEST_ACCOUNT_ID = os.getenv('INVEST_ACCOUNT_ID', None)
 
 from Config import Config as ConfigMOEX  # для авторизации на Московской Бирже
+
+
+# Глобальный клиент для работы с Tinkoff API
+_tinkoff_client = None
+
+def get_tinkoff_client():
+    """Получить единый инстанс клиента Tinkoff API"""
+    global _tinkoff_client
+    if _tinkoff_client is None:
+        _tinkoff_client = Client(INVEST_TOKEN)
+    return _tinkoff_client
+
+def get_account_id(client):
+    """Получить ID активного счета"""
+    accounts = client.users.get_accounts()
+    for acc in accounts.accounts:
+        if acc.status.value == 'ACCOUNT_STATUS_OPEN':
+            return acc.id
+    return None
 
 
 # Торговая система
@@ -55,11 +74,21 @@ class RSIStrategy(bt.Strategy):
         self.sell_once = {}
         self.order_time = None
         self.account_id = self.p.account_id
+        self.client = None
 
     def start(self):
         for d in self.datas:  # Running through all the tickers
             self.buy_once[d._name] = False
             self.sell_once[d._name] = False
+        
+        # Инициализируем клиент при старте стратегии
+        self.client = get_tinkoff_client()
+        
+        # Получаем account_id если он не задан
+        if not self.account_id:
+            self.account_id = get_account_id(self.client)
+            if not self.account_id:
+                raise ValueError("Не удалось получить account_id. Проверьте токен и статус счетов.")
 
     def next(self):
         """Приход нового бара тикера"""
@@ -100,38 +129,24 @@ class RSIStrategy(bt.Strategy):
                 print(f"\t - Free balance: {self.broker.getcash()}")
 
                 if not self.buy_once[ticker]:  # Enter long
-                    # Получаем account_id, если он не задан
-                    if not self.account_id:
-                        with self.p.tb_client(INVEST_TOKEN) as client_get:
-                            accounts = client_get.users.get_accounts()
-                            for acc in accounts.accounts:
-                                if acc.status.value == 'ACCOUNT_STATUS_OPEN':
-                                    self.account_id = acc.id
-                                    break
-                    
-                    if not self.account_id:
-                        print(f"Ошибка: Не удалось получить account_id для {ticker}")
-                        continue
-
                     free_money = self.broker.getcash()
                     print(f" - free_money: {free_money}")
                     print(f" - account_id: {self.account_id}")
 
                     # Выставляем заявку на покупку по рынку
-                    with self.p.tb_client(INVEST_TOKEN) as client:
-                        response = client.orders.post_order(
-                            instrument_id=ticker,
-                            quantity=1,
-                            direction=OrderDirection.ORDER_DIRECTION_BUY,
-                            account_id=self.account_id,
-                            order_type=OrderType.ORDER_TYPE_MARKET,
-                            order_id=str(uuid.uuid4()),
-                            time_in_force=TimeInForceType.TIME_IN_FORCE_DAY,
-                        )
-                        self.order_time = dt.datetime.now()
-                        print(f"Выставили заявку на покупку 1 лота {ticker}:", response)
-                        print("\t - order_id:", response.order_id)
-                        print("\t - время:", self.order_time)
+                    response = self.client.orders.post_order(
+                        instrument_id=ticker,
+                        quantity=1,
+                        direction=OrderDirection.ORDER_DIRECTION_BUY,
+                        account_id=self.account_id,
+                        order_type=OrderType.ORDER_TYPE_MARKET,
+                        order_id=str(uuid.uuid4()),
+                        time_in_force=TimeInForceType.TIME_IN_FORCE_DAY,
+                    )
+                    self.order_time = dt.datetime.now()
+                    print(f"Выставили заявку на покупку 1 лота {ticker}:", response)
+                    print("\t - order_id:", response.order_id)
+                    print("\t - время:", self.order_time)
 
                     # print(f"\t - Выставлена заявка {self.orders[data._name]} на покупку {data._name}")
 
@@ -145,21 +160,20 @@ class RSIStrategy(bt.Strategy):
                             print(f"\t - Продаём по рынку {data._name}...")
 
                             # Выставляем заявку на продажу по рынку
-                            with self.p.tb_client(INVEST_TOKEN) as client:
-                                response = client.orders.post_order(
-                                    instrument_id=ticker,
-                                    quantity=1,
-                                    direction=OrderDirection.ORDER_DIRECTION_SELL,
-                                    account_id=self.account_id,
-                                    order_type=OrderType.ORDER_TYPE_MARKET,
-                                    order_id=str(uuid.uuid4()),
-                                    time_in_force=TimeInForceType.TIME_IN_FORCE_DAY,
-                                )
-                                self.order_time = None
+                            response = self.client.orders.post_order(
+                                instrument_id=ticker,
+                                quantity=1,
+                                direction=OrderDirection.ORDER_DIRECTION_SELL,
+                                account_id=self.account_id,
+                                order_type=OrderType.ORDER_TYPE_MARKET,
+                                order_id=str(uuid.uuid4()),
+                                time_in_force=TimeInForceType.TIME_IN_FORCE_DAY,
+                            )
+                            self.order_time = None
 
-                                print(f"Выставили заявку на продажу 1 лота {ticker}:", response)
-                                print("\t - order_id:", response.order_id)
-                                print("\t - время:", self.order_time)
+                            print(f"Выставили заявку на продажу 1 лота {ticker}:", response)
+                            print("\t - order_id:", response.order_id)
+                            print("\t - время:", self.order_time)
 
                             self.sell_once[ticker] = True  # для предотвращения повторной продажи
 
@@ -220,6 +234,13 @@ if __name__ == '__main__':
 
     # Получаем account_id из переменной окружения или используем None (будет выбран первый доступный)
     account_id = INVEST_ACCOUNT_ID
+    
+    # Инициализируем глобальный клиент и получаем account_id при старте
+    _ = get_tinkoff_client()  # Инициализация клиента
+    if not account_id:
+        account_id = get_account_id(_tinkoff_client)
+        if not account_id:
+            raise ValueError("Не удалось получить account_id. Проверьте токен и статус счетов.")
 
     symbol = 'SNGS'  # Тикер в формате <Код тикера>
     # symbol2 = 'LKOH'  # Тикер в формате <Код тикера>
