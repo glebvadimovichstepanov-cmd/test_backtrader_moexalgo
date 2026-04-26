@@ -100,23 +100,30 @@ class RSIStrategy(bt.Strategy):
                 print(f"\t - Free balance: {self.broker.getcash()}")
 
                 if not self.buy_once[ticker]:  # Enter long
+                    # Получаем account_id, если он не задан
+                    if not self.account_id:
+                        with self.p.tb_client(INVEST_TOKEN) as client_get:
+                            accounts = client_get.users.get_accounts()
+                            for acc in accounts.accounts:
+                                if acc.status.value == 'ACCOUNT_STATUS_OPEN':
+                                    self.account_id = acc.id
+                                    break
+                    
+                    if not self.account_id:
+                        print(f"Ошибка: Не удалось получить account_id для {ticker}")
+                        continue
+
                     free_money = self.broker.getcash()
                     print(f" - free_money: {free_money}")
+                    print(f" - account_id: {self.account_id}")
 
-                    # lot = self.p.info_tickers[ticker]['securities']['LOTSIZE']
-                    # size = 1 * lot  # купим 1 лот - проверку на наличие денег не будем делать, считаем что они есть)
-                    # price = self.format_price(ticker, data.close[0] * 0.995)  # buy at close price -0.005% - to prevent buy
-                    # # price = 273.65
-                    # print(f" - buy {ticker} size = {size} at price = {price}")
-
-                    # self.orders[data._name] = self.buy(data=data, exectype=bt.Order.Limit, price=price, size=size)
+                    # Выставляем заявку на покупку по рынку
                     with self.p.tb_client(INVEST_TOKEN) as client:
-                        # Выставляем заявку на покупку по рынку
                         response = client.orders.post_order(
                             instrument_id=ticker,
-                            quantity=int(1),
+                            quantity=1,
                             direction=OrderDirection.ORDER_DIRECTION_BUY,
-                            account_id=str(self.account_id) if self.account_id else None,
+                            account_id=self.account_id,
                             order_type=OrderType.ORDER_TYPE_MARKET,
                             order_id=str(uuid.uuid4()),
                             time_in_force=TimeInForceType.TIME_IN_FORCE_DAY,
@@ -137,14 +144,13 @@ class RSIStrategy(bt.Strategy):
                             print("sell")
                             print(f"\t - Продаём по рынку {data._name}...")
 
-                            # self.orders[data._name] = self.close()  # закрываем позицию по рынку
+                            # Выставляем заявку на продажу по рынку
                             with self.p.tb_client(INVEST_TOKEN) as client:
-                                # Выставляем заявку на продажу по рынку
                                 response = client.orders.post_order(
                                     instrument_id=ticker,
-                                    quantity=int(1),
+                                    quantity=1,
                                     direction=OrderDirection.ORDER_DIRECTION_SELL,
-                                    account_id=str(self.account_id) if self.account_id else None,
+                                    account_id=self.account_id,
                                     order_type=OrderType.ORDER_TYPE_MARKET,
                                     order_id=str(uuid.uuid4()),
                                     time_in_force=TimeInForceType.TIME_IN_FORCE_DAY,
