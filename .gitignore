@@ -1,24 +1,24 @@
 ```python
-# Compiled Python files
+# Compiled and binary files
 *.pyc
 __pycache__/
+*.o
+*.obj
+*.so
+*.dll
+*.exe
 
-# Virtual environments
+# Dependencies
 venv/
 .venv/
-env/
-
-# Logs
-*.log
-
-# Temporary files
-*.tmp
-*.swp
-
-# Environment files
 .env
 .env.local
 *.env.*
+
+# Logs and temp files
+*.log
+*.tmp
+*.swp
 
 # Editors
 .vscode/
@@ -28,6 +28,11 @@ env/
 .coverage
 coverage/
 htmlcov/
+
+# Distribution artifacts
+dist/
+build/
+*.egg-info/
 
 # Python cache
 .mypy_cache/

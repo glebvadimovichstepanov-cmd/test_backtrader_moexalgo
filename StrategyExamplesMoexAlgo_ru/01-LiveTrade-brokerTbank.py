@@ -3,6 +3,7 @@
 import datetime as dt
 from datetime import timezone
 import os
+import uuid
 import backtrader as bt
 from backtrader_moexalgo.moexalgo_store import MoexAlgoStore  # Хранилище AlgoPack
 
@@ -117,7 +118,7 @@ class RSIStrategy(bt.Strategy):
                             direction=OrderDirection.ORDER_DIRECTION_BUY,
                             account_id=self.account_id,
                             order_type=OrderType.ORDER_TYPE_MARKET,
-                            order_id=dt.datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f'),
+                            order_id=str(uuid.uuid4()),
                             time_in_force=TimeInForceType.TIME_IN_FORCE_DAY,
                         )
                         self.order_time = dt.datetime.now()
@@ -145,7 +146,7 @@ class RSIStrategy(bt.Strategy):
                                     direction=OrderDirection.ORDER_DIRECTION_SELL,
                                     account_id=self.account_id,
                                     order_type=OrderType.ORDER_TYPE_MARKET,
-                                    order_id=dt.datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f'),
+                                    order_id=str(uuid.uuid4()),
                                     time_in_force=TimeInForceType.TIME_IN_FORCE_DAY,
                                 )
                                 self.order_time = None
