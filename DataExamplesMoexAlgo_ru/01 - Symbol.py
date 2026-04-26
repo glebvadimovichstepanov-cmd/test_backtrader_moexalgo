@@ -23,7 +23,7 @@ if __name__ == '__main__':  # Точка входа при запуске это
     days_ago_N = today - timedelta(days=30)  # N дней назад
 
     # 1. Все исторические дневные бары за неделю
-    # data = store.getdata(dataname=symbol, timeframe=TimeFrame.Days, fromdate=week_ago)
+    data = store.getdata(dataname=symbol, timeframe=TimeFrame.Days, fromdate=week_ago)
 
     # 2. Исторические часовые бары с дожи 4-х цен (four_price_doji) за текущий год
     # data = store.getdata(dataname=symbol, timeframe=TimeFrame.Minutes, compression=60, fromdate=datetime(today.year, 1, 1), todate=datetime(today.year, 12, 31), four_price_doji=True)
@@ -44,10 +44,10 @@ if __name__ == '__main__':  # Точка входа при запуске это
     # data = store.getdata(dataname=symbol, timeframe=TimeFrame.Minutes, compression=5, fromdate=days_ago_5, live_bars=True)  # Пример с ТФ M5, которого нет в данных, он получается из '1m' (resample)
 
     # 9. Исторические 5 минутные бары + Super Candles (tradestats: history M5)
-    data = store.getdata(dataname=symbol, timeframe=TimeFrame.Minutes, compression=5, fromdate=days_ago_5, live_bars=True,
-                         super_candles=True,  # для получения свечей SuperCandles с расширенным набором характеристик
-                         metric='tradestats',  # + необходимо указать тип получаемых метрик
-                         )
+    # data = store.getdata(dataname=symbol, timeframe=TimeFrame.Minutes, compression=5, fromdate=days_ago_5, live_bars=True,
+    #                      super_candles=True,  # для получения свечей SuperCandles с расширенным набором характеристик
+    #                      metric='tradestats',  # + необходимо указать тип получаемых метрик
+    #                      )
 
     # 10. Исторические 10 минутные бары + Super Candles (tradestats: history + live M10 resample from M5)
     # data = store.getdata(dataname=symbol, timeframe=TimeFrame.Minutes, compression=10, fromdate=days_ago_5, live_bars=True,
