@@ -29,6 +29,7 @@ class MoexAlgoData(DataBase):
         self.timeframe = tf.Minutes
         self.compression = 1
         self.from_date = None
+        self.to_date = None
         self.live_bars = None
 
         self.super_candles = False
@@ -54,11 +55,13 @@ class MoexAlgoData(DataBase):
         if hasattr(self.p, 'timeframe'): self.timeframe = self.p.timeframe
         if hasattr(self.p, 'compression'): self.compression = self.p.compression
         if hasattr(self.p, 'fromdate'): self.from_date = datetime.combine(self.p.fromdate, time.min)
+        if hasattr(self.p, 'todate'): self.to_date = datetime.combine(self.p.todate, time.min)
 
         if 'live_bars' in kwargs: self.live_bars = kwargs['live_bars']
         if 'skip_first_date' in kwargs: self.skip_first_date = kwargs['skip_first_date']
         if 'skip_last_date' in kwargs: self.skip_last_date = kwargs['skip_last_date']
         if 'four_price_doji' in kwargs: self.four_price_doji = kwargs['four_price_doji']
+        if 'todate' in kwargs: self.to_date = kwargs['todate']
 
         if 'super_candles' in kwargs: self.super_candles = kwargs['super_candles']
         if 'metric' in kwargs:
@@ -183,6 +186,7 @@ class MoexAlgoData(DataBase):
                     klines, get_live_bars_from = self.get_candles(from_date=self.get_live_bars_from,
                                                                   symbol=self.symbol,
                                                                   interval=self.interval,
+                                                                  to_date=self.to_date,
                                                                   skip_first_date=self.skip_first_date,
                                                                   skip_last_date=self.skip_last_date,
                                                                   four_price_doji=self.four_price_doji)
@@ -244,6 +248,7 @@ class MoexAlgoData(DataBase):
                 klines, get_live_bars_from = self.get_candles(from_date=self.from_date,
                                                               symbol=self.symbol,
                                                               interval=self.interval,
+                                                              to_date=self.to_date,
                                                               skip_first_date=self.skip_first_date,
                                                               skip_last_date=self.skip_last_date,
                                                               four_price_doji=self.four_price_doji)  # , is_test=True
@@ -267,11 +272,12 @@ class MoexAlgoData(DataBase):
         else:
             self._start_live()
 
-    def get_candles(self, from_date, symbol, interval, skip_first_date=False, skip_last_date=False, four_price_doji=True, is_test=False):
+    def get_candles(self, from_date, symbol, interval, to_date=None, skip_first_date=False, skip_last_date=False, four_price_doji=True, is_test=False):
         """Получение баров, используем библиотеку moexalgo
             :param date from_date: С какой даты получаем данные
             :param str symbol: Код тикера
             :param str interval: Временной интервал '1m', '10m', '1h', '1D', '1W', '1M' + '5m' resampling from '1m' + '30m' resampling from '10m'
+            :param date to_date: До какой даты получаем данные
             :param bool skip_first_date: Убрать бары на первую полученную дату
             :param bool skip_last_date: Убрать бары на последнюю полученную дату
             :param bool four_price_doji: Оставить бары с дожи 4-х цен
@@ -302,6 +308,11 @@ class MoexAlgoData(DataBase):
         df = pd.DataFrame()
         get_live_bars_from = None
         till_date = datetime.now().date()  # Получать данные будем до текущей даты
+        if to_date:
+            if isinstance(to_date, datetime):
+                till_date = to_date.date()
+            else:
+                till_date = to_date
         ticker = Ticker(symbol)  # Пока реализуем только для тикеров ММВБ
         
         # Получаем все данные сразу в виде DataFrame (новый API moexalgo)
