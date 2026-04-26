@@ -1,6 +1,7 @@
 # pip install t-tech-investments --index-url https://opensource.tbank.ru/api/v4/projects/238/packages/pypi/simple
 
 import datetime as dt
+from datetime import timezone
 import os
 import backtrader as bt
 from backtrader_moexalgo.moexalgo_store import MoexAlgoStore  # Хранилище AlgoPack
@@ -117,7 +118,7 @@ class RSIStrategy(bt.Strategy):
                             direction=OrderDirection.ORDER_DIRECTION_BUY,
                             account_id=self.account_id,
                             order_type=OrderType.ORDER_TYPE_MARKET,
-                            order_id=dt.datetime.utcnow().strftime('%Y%m%d%H%M%S%f'),
+                            order_id=dt.datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f'),
                             time_in_force=TimeInForceType.TIME_IN_FORCE_DAY,
                         )
                         self.order_time = dt.datetime.now()
@@ -146,7 +147,7 @@ class RSIStrategy(bt.Strategy):
                                     direction=OrderDirection.ORDER_DIRECTION_SELL,
                                     account_id=self.account_id,
                                     order_type=OrderType.ORDER_TYPE_MARKET,
-                                    order_id=dt.datetime.utcnow().strftime('%Y%m%d%H%M%S%f'),
+                                    order_id=dt.datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f'),
                                     time_in_force=TimeInForceType.TIME_IN_FORCE_DAY,
                                 )
                                 self.order_time = None
@@ -233,7 +234,7 @@ if __name__ == '__main__':
 
     # live 1-минутные бары / таймфрейм M1
     timeframe = "M1"
-    fromdate = dt.datetime.utcnow()
+    fromdate = dt.datetime.now(timezone.utc)
     data = store.getdata(timeframe=bt.TimeFrame.Minutes, compression=1, dataname=symbol, fromdate=fromdate,
                          live_bars=True, name=f"{live_prefix}{symbol}")  # поставьте здесь True - если нужно получать live бары # name - нужен для выставления в live заявок
     # data2 = store.getdata(timeframe=bt.TimeFrame.Minutes, compression=1, dataname=symbol2, fromdate=fromdate, live_bars=True)  # поставьте здесь True - если нужно получать live бары
