@@ -114,9 +114,9 @@ class RSIStrategy(bt.Strategy):
                         # Выставляем заявку на покупку по рынку
                         response = client.orders.post_order(
                             instrument_id=ticker,
-                            quantity=1,
+                            quantity=int(1),
                             direction=OrderDirection.ORDER_DIRECTION_BUY,
-                            account_id=self.account_id,
+                            account_id=str(self.account_id) if self.account_id else None,
                             order_type=OrderType.ORDER_TYPE_MARKET,
                             order_id=str(uuid.uuid4()),
                             time_in_force=TimeInForceType.TIME_IN_FORCE_DAY,
@@ -142,9 +142,9 @@ class RSIStrategy(bt.Strategy):
                                 # Выставляем заявку на продажу по рынку
                                 response = client.orders.post_order(
                                     instrument_id=ticker,
-                                    quantity=1,
+                                    quantity=int(1),
                                     direction=OrderDirection.ORDER_DIRECTION_SELL,
-                                    account_id=self.account_id,
+                                    account_id=str(self.account_id) if self.account_id else None,
                                     order_type=OrderType.ORDER_TYPE_MARKET,
                                     order_id=str(uuid.uuid4()),
                                     time_in_force=TimeInForceType.TIME_IN_FORCE_DAY,
