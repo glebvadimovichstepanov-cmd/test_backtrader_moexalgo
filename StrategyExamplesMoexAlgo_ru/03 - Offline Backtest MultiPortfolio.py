@@ -116,7 +116,7 @@ class RSIStrategy(bt.Strategy):
 
 if __name__ == '__main__':
 
-    symbols = ('SBER', 'LKOH', 'AFLT', 'GMKN', )  # тикеры, по которым будем получать данные
+    symbols = ('SNGS', 'LKOH', 'AFLT', 'GMKN', )  # тикеры, по которым будем получать данные
 
     store = MoexAlgoStore()  # Хранилище AlgoPack
     # store = MoexAlgoStore(login=ConfigMOEX.Login, password=ConfigMOEX.Password)  # Хранилище AlgoPack + авторизация на Московской Бирже

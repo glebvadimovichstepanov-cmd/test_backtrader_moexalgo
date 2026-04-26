@@ -70,7 +70,7 @@ class StrategySaveOHLCVToDF(bt.Strategy):
 
 # Исторические/новые бары тикера
 if __name__ == '__main__':  # Точка входа при запуске этого скрипта
-    symbol = 'SBER'  # Тикер в формате <Код тикера>
+    symbol = 'SNGS'  # Тикер в формате <Код тикера>
 
     store = MoexAlgoStore()  # Хранилище AlgoPack
     # store = MoexAlgoStore(login=ConfigMOEX.Login, password=ConfigMOEX.Password)  # Хранилище AlgoPack + авторизация на Московской Бирже

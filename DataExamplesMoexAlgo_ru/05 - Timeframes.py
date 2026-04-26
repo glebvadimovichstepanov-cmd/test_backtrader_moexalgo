@@ -9,7 +9,7 @@ from Config import Config as ConfigMOEX  # для авторизации на М
 # Несколько временнЫх интервалов по одному тикеру: Получение из истории + live
 if __name__ == '__main__':  # Точка входа при запуске этого скрипта
 
-    symbol = 'SBER'  # Тикер в формате <Код тикера>
+    symbol = 'SNGS'  # Тикер в формате <Код тикера>
 
     store = MoexAlgoStore()  # Хранилище AlgoPack
     # store = MoexAlgoStore(login=ConfigMOEX.Login, password=ConfigMOEX.Password)  # Хранилище AlgoPack + авторизация на Московской Бирже

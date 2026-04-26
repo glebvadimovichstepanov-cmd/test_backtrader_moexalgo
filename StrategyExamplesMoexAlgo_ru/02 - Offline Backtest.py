@@ -116,7 +116,7 @@ class RSIStrategy(bt.Strategy):
 
 if __name__ == '__main__':
 
-    symbol = 'SBER'  # Тикер в формате <Код тикера>
+    symbol = 'SNGS'  # Тикер в формате <Код тикера>
     symbol2 = 'LKOH'  # Тикер в формате <Код тикера>
 
     store = MoexAlgoStore()  # Хранилище AlgoPack
