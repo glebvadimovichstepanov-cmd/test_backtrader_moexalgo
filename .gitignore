@@ -1,16 +1,11 @@
 ```python
-# Compiled and binary files
+# Compiled and build artifacts
 *.pyc
 __pycache__/
-*.o
-*.obj
-*.so
-*.dll
-*.exe
 
 # Dependencies
-venv/
 .venv/
+venv/
 .env
 .env.local
 *.env.*
@@ -29,12 +24,8 @@ venv/
 coverage/
 htmlcov/
 
-# Distribution artifacts
+# Distribution / packaging
 dist/
 build/
 *.egg-info/
-
-# Python cache
-.mypy_cache/
-.pytest_cache/
 ```
