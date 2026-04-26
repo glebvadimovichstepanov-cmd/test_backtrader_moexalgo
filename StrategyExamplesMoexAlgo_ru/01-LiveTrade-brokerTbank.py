@@ -14,7 +14,8 @@ INVEST_TOKEN = os.getenv('INVEST_TOKEN', '')
 if not INVEST_TOKEN:
     raise ValueError("Переменная окружения INVEST_TOKEN не установлена. Установите её перед запуском скрипта.")
 
-from my_config.Config_Tbank import Config  # Файл конфигурации
+# ID счета берем из переменной окружения INVEST_ACCOUNT_ID (опционально)
+INVEST_ACCOUNT_ID = os.getenv('INVEST_ACCOUNT_ID', None)
 
 from Config import Config as ConfigMOEX  # для авторизации на Московской Бирже
 
@@ -211,12 +212,8 @@ if __name__ == '__main__':
     live_prefix = ''  # префикс для выставления заявок в live
     tb_client = Client  # Коннект к Tbank API - для выставления заявок на покупку/продажу
 
-    # Получаем account_id из переменной окружения или используем значение из Config по умолчанию
-    account_id_env = os.getenv('INVEST_ACCOUNT_ID', '')
-    if account_id_env:
-        account_id = account_id_env
-    else:
-        account_id = Config.AccountIds[0]  # id счета
+    # Получаем account_id из переменной окружения или используем None (будет выбран первый доступный)
+    account_id = INVEST_ACCOUNT_ID
 
     symbol = 'SBER'  # Тикер в формате <Код тикера>
     # symbol2 = 'LKOH'  # Тикер в формате <Код тикера>
