@@ -72,4 +72,4 @@ if __name__ == '__main__':  # Точка входа при запуске это
     cerebro.adddata(data)  # Добавляем данные
     cerebro.addstrategy(StrategyJustPrintsOHLCVAndSuperCandles)  # Добавляем торговую систему
     cerebro.run()  # Запуск торговой системы
-    cerebro.plot(style='candle')  # Рисуем график !!! ЕСЛИ, никаких данных с рынка не получили, то здесь будет AttributeError: 'Plot_OldSync' object has no attribute 'mpyplot'
+    # cerebro.plot(style='candle')  # Рисуем график !!! ЕСЛИ, никаких данных с рынка не получили, то здесь будет AttributeError: 'Plot_OldSync' object has no attribute 'mpyplot'
