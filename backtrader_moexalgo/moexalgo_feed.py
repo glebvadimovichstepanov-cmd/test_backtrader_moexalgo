@@ -298,12 +298,12 @@ class MoexAlgoData(DataBase):
         if interval == '5min':
             resample = True
             interval = '1min'
-            interval_to = '5T'  # is equal for '5m (pandas)
+            interval_to = '5min'  # is equal for '5m (pandas)
 
         if interval == '30min':
             resample = True
             interval = '10min'
-            interval_to = '30T'  # is equal for '30m (pandas)
+            interval_to = '30min'  # is equal for '30m (pandas)
 
         df = pd.DataFrame()
         get_live_bars_from = None
@@ -373,12 +373,12 @@ class MoexAlgoData(DataBase):
         if interval == '10min':
             resample = True
             interval = '5min'
-            interval_to = '10T'  # is equal for '10m (pandas)
+            interval_to = '10min'  # is equal for '10m (pandas)
 
         if interval == '30min':
             resample = True
             interval = '5min'
-            interval_to = '30T'  # is equal for '30m (pandas)
+            interval_to = '30min'  # is equal for '30m (pandas)
 
         df = pd.DataFrame()
         get_live_bars_from = None
