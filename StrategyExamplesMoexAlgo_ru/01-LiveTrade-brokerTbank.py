@@ -32,12 +32,13 @@ def get_tinkoff_client():
         _tinkoff_client = Client(INVEST_TOKEN)
     return _tinkoff_client
 
-def get_account_id(client):
+def get_account_id(token):
     """Получить ID активного счета"""
-    accounts = client.users.get_accounts()
-    for acc in accounts.accounts:
-        if acc.status.value == 'ACCOUNT_STATUS_OPEN':
-            return acc.id
+    with Client(token) as client:
+        accounts = client.users.get_accounts()
+        for acc in accounts.accounts:
+            if acc.status.value == 'ACCOUNT_STATUS_OPEN':
+                return acc.id
     return None
 
 
@@ -86,7 +87,7 @@ class RSIStrategy(bt.Strategy):
         
         # Получаем account_id если он не задан
         if not self.account_id:
-            self.account_id = get_account_id(self.client)
+            self.account_id = get_account_id(INVEST_TOKEN)
             if not self.account_id:
                 raise ValueError("Не удалось получить account_id. Проверьте токен и статус счетов.")
 
@@ -238,7 +239,7 @@ if __name__ == '__main__':
     # Инициализируем глобальный клиент и получаем account_id при старте
     _ = get_tinkoff_client()  # Инициализация клиента
     if not account_id:
-        account_id = get_account_id(_tinkoff_client)
+        account_id = get_account_id(INVEST_TOKEN)
         if not account_id:
             raise ValueError("Не удалось получить account_id. Проверьте токен и статус счетов.")
 
