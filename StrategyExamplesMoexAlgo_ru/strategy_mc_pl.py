@@ -64,13 +64,13 @@ class StrategyMCWithTPSL(bt.Strategy):
                 except:
                     pass
 
-                # Дополнительная нагрузка (как в оригинале)
-                for i in range(1, 1000000):
-                    z = math.sqrt(64 * 64 * 64 * 64 * 64)
+                # Дополнительная нагрузка удалена для ускорения бэктеста
+                # for i in range(1, 1000000):
+                #     z = math.sqrt(64 * 64 * 64 * 64 * 64)
 
-                # Сигналы
-                signal1 = self.crossover[ticker].lines.crossover[0]  # Покупка
-                signal2 = self.crossdown[ticker].lines.crossover[0]  # Продажа
+                # Сигналы - используем правильное обращение к линиям индикатора
+                signal1 = self.crossover[ticker].crossover[0]  # Покупка
+                signal2 = self.crossdown[ticker].crossover[0]  # Продажа
 
                 if not self.getposition(data):  # Если позиции нет
                     if signal1 == 1:

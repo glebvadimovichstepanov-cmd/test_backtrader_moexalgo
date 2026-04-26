@@ -1,0 +1,7 @@
+moexalgo
+pandas
+matplotlib
+numpy
+backtrader
+requests
+websockets
