@@ -1,5 +1,5 @@
 from backtrader.dataseries import TimeFrame
-from moexalgo import session, Market
+from moexalgo import session, Ticker
 
 from .moexalgo_feed import MoexAlgoData
 
@@ -19,7 +19,6 @@ class MoexAlgoStore(object):
 
     def __init__(self, login="", password=""):
         """Инициализация необходимых переменных"""
-        self.market = Market('stocks')
         self._cash = 0
         self._value = 0
         self._data = None
@@ -49,4 +48,5 @@ class MoexAlgoStore(object):
 
     def get_symbol_info(self, symbol):
         """Метод получения информации по тикеру"""
-        return self.market._ticker_info(symbol)
+        ticker = Ticker(symbol)
+        return ticker.info()

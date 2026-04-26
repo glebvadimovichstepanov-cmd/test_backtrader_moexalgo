@@ -278,9 +278,12 @@ class MoexAlgoData(DataBase):
             :param bool is_test: Для проведения live теста в offline
         """
 
-        last_date = datetime(2020, 1, 1)  # Получать данные будем с первой возможной даты и времени Алгопака
-        if from_date and from_date >= last_date:
-            last_date = from_date  # Получать данные будем с указанной даты
+        last_date = datetime(2020, 1, 1).date()  # Получать данные будем с первой возможной даты и времени Алгопака
+        if from_date:
+            if isinstance(from_date, datetime):
+                from_date = from_date.date()
+            if from_date >= last_date:
+                last_date = from_date  # Получать данные будем с указанной даты
         last_dt = last_date
 
         # проверяем, нужно ли делать resample
@@ -300,57 +303,16 @@ class MoexAlgoData(DataBase):
         get_live_bars_from = None
         till_date = datetime.now().date()  # Получать данные будем до текущей даты
         ticker = Ticker(symbol)  # Пока реализуем только для тикеров ММВБ
-        while True:  # Будем получать данные пока не получим все
-            iterator = ticker.candles(date=last_date, till_date=till_date, period=interval,
-                                      limit=self.limit)  # История. Максимум, 50000 баров
-            rows_list = []  # Будем собирать строки в список
-            try:
-                for it in iterator:  # Итерируем генератор
-                    rows_list.append(it.__dict__)  # Класс превращаем в словарь, добавляем строку в список
-            except:  # if error - we are in notebook
-                rows_list = iterator
-
-            if len(rows_list):
-                stats = pd.DataFrame(rows_list)  # Из списка создаем pandas DataFrame
-                stats.rename(columns={'begin': 'datetime'}, inplace=True)  # Переименовываем колонку даты и времени
-
-                if len(stats):
-                    stats = stats[['datetime', 'open', 'high', 'low', 'close', 'volume']]  # Отбираем нужные колонки
-
-                if skip_first_date:  # Если убираем бары на первую дату
-                    len_with_first_date = len(stats)  # Кол-во баров до удаления на первую дату
-                    first_date = stats.iloc[0]['datetime'].date()  # Первая дата
-                    stats.drop(stats[(stats['datetime'].date() == first_date)].index, inplace=True)  # Удаляем их
-                    print(self.symbol, f' - Удалено баров на первую дату {first_date}: {len_with_first_date - len(stats)}')
-                if skip_last_date:  # Если убираем бары на последнюю дату
-                    len_with_last_date = len(stats)  # Кол-во баров до удаления на последнюю дату
-                    last_date = stats.iloc[-1]['datetime'].date()  # Последняя дата
-                    stats.drop(stats[(stats['datetime'].date() == last_date)].index, inplace=True)  # Удаляем их
-                    print(self.symbol, f' - Удалено баров на последнюю дату {last_date}: {len_with_last_date - len(stats)}')
-                if not four_price_doji:  # Если удаляем дожи 4-х цен
-                    len_with_doji = len(stats)  # Кол-во баров до удаления дожи
-                    stats.drop(stats[(stats['high'] == stats['low'])].index,
-                               inplace=True)  # Удаляем их по условия High == Low
-                    print(self.symbol, ' - Удалено дожи 4-х цен:', len_with_doji - len(stats))
-                if len(stats) == 0:  # Если нечего объединять
-                    print(self.symbol, '- Новых записей нет')
-                    break  # то дальше не продолжаем
-
-                last_stats_dt = stats.iloc[-1]['datetime']  # Последняя полученная дата и время
-                last_stats_date = last_stats_dt.date()  # Последняя полученная дата
-                if last_stats_dt == last_dt:  # Если не получили новые значения
-                    # print(self.symbol, '- Все данные получены')
-                    get_live_bars_from = last_stats_dt
-                    break  # то дальше не продолжаем
-
-                print(self.symbol, '- Получены данные с', stats.iloc[0]['datetime'], 'по', last_stats_dt)
-
-                last_dt = last_stats_dt  # Запоминаем последние полученные дату и время
-                last_date = last_stats_date  # и дату
-
-                df = pd.concat([df, stats]).drop_duplicates(keep='last')  # Добавляем новые данные в существующие. Удаляем дубликаты. Сбрасываем индекс
-            elif not len(rows_list) and not self.live_bars:
-                break
+        
+        # Получаем все данные сразу в виде DataFrame (новый API moexalgo)
+        stats = ticker.candles(start=last_date, end=till_date, period=interval, native=False)
+        
+        if len(stats):
+            stats = stats.rename(columns={'begin': 'datetime'})  # Переименовываем колонку даты и времени
+            stats = stats[['datetime', 'open', 'high', 'low', 'close', 'volume']]  # Отбираем нужные колонки
+            
+            print(symbol, '- Получены данные с', stats.iloc[0]['datetime'], 'по', stats.iloc[-1]['datetime'])
+            df = stats
 
         # если требуется сделать resample
         if resample and not df.empty:
@@ -413,11 +375,11 @@ class MoexAlgoData(DataBase):
         ticker = Ticker(symbol)  # Пока реализуем только для тикеров ММВБ
         while True:  # Будем получать данные пока не получим все
             if metric == 'tradestats':  # Сделки
-                iterator = ticker.tradestats(date=last_date, till_date=till_date, limit=self.limit)
+                iterator = ticker.tradestats(start=last_date, end=till_date)
             elif metric == 'orderstats':  # Заявки
-                iterator = ticker.orderstats(date=last_date, till_date=till_date, limit=self.limit)
+                iterator = ticker.orderstats(start=last_date, end=till_date)
             elif metric == 'obstats':  # Стакан
-                iterator = ticker.obstats(date=last_date, till_date=till_date, limit=self.limit)
+                iterator = ticker.obstats(start=last_date, end=till_date)
             else:
                 print(self.symbol, 'Метрика указана неверно')
                 break
