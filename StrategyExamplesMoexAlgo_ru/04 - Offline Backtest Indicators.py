@@ -174,12 +174,12 @@ if __name__ == '__main__':
 
     # # Исторические 10-минутные бары за 10000 часов + новые live бары / таймфрейм M10
     # timeframe = "M10"
-    # fromdate = dt.datetime.utcnow() - dt.timedelta(minutes=60*10000)
+    # fromdate = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=60*10000)
     # data = store.getdata(timeframe=bt.TimeFrame.Minutes, compression=10, dataname=symbol, fromdate=fromdate, live_bars=False)  # поставьте здесь True - если нужно получать live бары
     # data2 = store.getdata(timeframe=bt.TimeFrame.Minutes, compression=10, dataname=symbol2, fromdate=fromdate, live_bars=False)  # поставьте здесь True - если нужно получать live бары
 
     timeframe = "M5"
-    fromdate = dt.datetime.utcnow() - dt.timedelta(minutes=5 * 1000)
+    fromdate = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=5 * 1000)
     data = store.getdata(dataname=symbol, timeframe=bt.TimeFrame.Minutes, compression=5, fromdate=fromdate, live_bars=False,
                          super_candles=True,  # для получения свечей SuperCandles с расширенным набором характеристик
                          metric='tradestats',  # + необходимо указать тип получаемых метрик
@@ -192,7 +192,7 @@ if __name__ == '__main__':
 
     # Исторические D1 бары за 365 дней + новые live бары / таймфрейм D1
     # timeframe = "D1"
-    # fromdate = dt.datetime.utcnow() - dt.timedelta(days=365*3)
+    # fromdate = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=365*3)
     # data = store.getdata(timeframe=bt.TimeFrame.Days, compression=1, dataname=symbol, fromdate=fromdate, live_bars=False)  # поставьте здесь True - если нужно получать live бары
     # data2 = store.getdata(timeframe=bt.TimeFrame.Days, compression=1, dataname=symbol2, fromdate=fromdate, live_bars=False)  # поставьте здесь True - если нужно получать live бары
 

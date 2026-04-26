@@ -137,7 +137,7 @@ if __name__ == '__main__':
     for _symbol in symbols:  # Пробегаемся по всем тикерам
         # Исторические 1-минутные бары за 10000 часов + новые live бары / таймфрейм M1
         timeframe = "M1"
-        fromdate = dt.datetime.utcnow() - dt.timedelta(minutes=60*10000)
+        fromdate = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=60*10000)
         data = store.getdata(timeframe=bt.TimeFrame.Minutes, compression=10, dataname=_symbol, fromdate=fromdate, live_bars=False)  # поставьте здесь True - если нужно получать live бары
 
         cerebro.adddata(data)  # Добавляем данные

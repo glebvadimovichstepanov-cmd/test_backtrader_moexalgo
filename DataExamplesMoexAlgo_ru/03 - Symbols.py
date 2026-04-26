@@ -19,15 +19,15 @@ if __name__ == '__main__':  # Точка входа при запуске это
     for _symbol in symbols:  # Пробегаемся по всем тикерам
 
         # 1. Исторические 5-минутные бары за последние 120 часов + График т.к. оффлайн/ таймфрейм M5
-        fromdate = dt.datetime.utcnow() - dt.timedelta(minutes=120*60)  # берем данные за последние 120 часов
+        fromdate = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=120*60)  # берем данные за последние 120 часов
         data = store.getdata(timeframe=bt.TimeFrame.Minutes, compression=5, dataname=_symbol, fromdate=fromdate, live_bars=False)
 
         # 2. Исторические 1-минутные бары за прошлый час + новые live бары / таймфрейм M1
-        # fromdate = dt.datetime.utcnow() - dt.timedelta(minutes=60)  # берем данные за последний 1 час
+        # fromdate = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=60)  # берем данные за последний 1 час
         # data = store.getdata(timeframe=bt.TimeFrame.Minutes, compression=1, dataname=_symbol, fromdate=fromdate, live_bars=True)
 
         # 3. Исторические 1-часовые бары за неделю + График т.к. оффлайн/ таймфрейм H1
-        # fromdate = dt.datetime.utcnow() - dt.timedelta(hours=24*7)  # берем данные за последнюю неделю от текущего времени
+        # fromdate = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=24*7)  # берем данные за последнюю неделю от текущего времени
         # data = store.getdata(timeframe=bt.TimeFrame.Minutes, compression=60, dataname=_symbol, fromdate=fromdate, live_bars=False)
 
         cerebro.adddata(data)  # Добавляем данные

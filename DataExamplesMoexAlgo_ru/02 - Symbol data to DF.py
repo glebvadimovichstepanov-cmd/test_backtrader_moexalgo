@@ -78,7 +78,7 @@ if __name__ == '__main__':  # Точка входа при запуске это
     cerebro = bt.Cerebro(quicknotify=True)
 
     # 1. Исторические D1 бары за 365 дней + График т.к. оффлайн/ таймфрейм D1
-    fromdate = dt.datetime.utcnow() - dt.timedelta(days=365)  # берем данные за 365 дней от текущего времени
+    fromdate = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=365)  # берем данные за 365 дней от текущего времени
     data = store.getdata(timeframe=bt.TimeFrame.Days, compression=1, dataname=symbol, fromdate=fromdate, live_bars=False)
 
     cerebro.adddata(data)  # Добавляем данные
