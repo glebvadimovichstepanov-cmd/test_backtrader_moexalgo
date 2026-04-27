@@ -1,15 +1,1 @@
-```
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.pickle
-*.pkl
-
-# Data cache
-StrategyExamplesMoexAlgo_ru/data_cache/
-
-# Compiled Python
-StrategyExamplesMoexAlgo_ru/__pycache__/
-```
+Nothing needs to be added to the .gitignore file since only a Python source file (.py) was modified and no build artifacts, dependencies, or temporary files were included in the changes.
