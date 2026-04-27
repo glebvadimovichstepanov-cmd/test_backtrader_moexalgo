@@ -32,11 +32,11 @@ class StrategyCMV4(bt.Strategy):
         ('high_vol_threshold', 0.035),
         
         # K coefficients for different regimes
-        ('K_out_low_vol', 1.6),
+        ('K_out_low_vol', 1.0),
         ('K_in_low_vol', 0.35),
-        ('K_out_normal_vol', 2.0),
+        ('K_out_normal_vol', 1.3),
         ('K_in_normal_vol', 0.5),
-        ('K_out_high_vol', 2.8),
+        ('K_out_high_vol', 1.8),
         ('K_in_high_vol', 0.7),
         
         # Smoothing parameters
