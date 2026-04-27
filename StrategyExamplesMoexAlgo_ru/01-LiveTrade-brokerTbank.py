@@ -1,3 +1,4 @@
+#Документация T-Invest API  https://opensource.tbank.ru/invest/invest-python
 # pip install t-tech-investments --index-url https://opensource.tbank.ru/api/v4/projects/238/packages/pypi/simple
 
 import datetime as dt
@@ -9,7 +10,7 @@ from backtrader_moexalgo.moexalgo_store import MoexAlgoStore  # Хранилищ
 
 # пример live торговли для Tbank (Тинькофф Инвестиции)
 from t_tech.invest import Client  # Коннект к Tbank API - для выставления заявок на покупку/продажу
-from t_tech.invest import OrderDirection, OrderType, TimeInForceType
+from t_tech.invest import OrderDirection, OrderType, TimeInForceType, InstrumentType
 
 # Токен берем из переменной окружения INVEST_TOKEN
 INVEST_TOKEN = os.getenv('INVEST_TOKEN')
@@ -120,45 +121,42 @@ class RSIStrategy(bt.Strategy):
         """Получить актуальный баланс свободного капитала от брокера"""
         try:
             def get_portfolio(client):
+                # В новом API t_tech.invest используем client.operations.get_portfolio
                 return client.operations.get_portfolio(account_id=self.account_id)
             
             portfolio_response = execute_with_client(get_portfolio)
-            if hasattr(portfolio_response, 'total_amount_bonds'):
-                # Для нового API t_tech.invest
-                total_value = float(portfolio_response.total_amount_bonds.units + portfolio_response.total_amount_bonds.nano / 1e9) if hasattr(portfolio_response.total_amount_bonds, 'nano') else float(portfolio_response.total_amount_bonds.units)
-                cash_value = float(portfolio_response.total_amount_currencies.units + portfolio_response.total_amount_currencies.nano / 1e9) if hasattr(portfolio_response.total_amount_currencies, 'nano') else float(portfolio_response.total_amount_currencies.units)
-                
-                # Свободные деньги - это доступный остаток на счете
-                if hasattr(portfolio_response, 'available_cash'):
-                    self.broker_balance = float(portfolio_response.available_cash.units + portfolio_response.available_cash.nano / 1e9) if hasattr(portfolio_response.available_cash, 'nano') else float(portfolio_response.available_cash.units)
-                else:
-                    # Если available_cash нет, используем cash из портфеля
-                    self.broker_balance = cash_value
-            else:
-                # Альтернативная структура ответа
-                positions = portfolio_response.positions if hasattr(portfolio_response, 'positions') else []
-                total_portfolio_value = 0
-                cash_value = 0
-                
-                for pos in positions:
-                    if hasattr(pos, 'instrument_type') and pos.instrument_type == 'currency':
-                        cash_value += float(pos.balance.units + pos.balance.nano / 1e9) if hasattr(pos.balance, 'nano') else float(pos.balance.units)
-                    else:
-                        total_portfolio_value += float(pos.balance.units * pos.average_position_price.units) if hasattr(pos, 'average_position_price') else 0
-                
-                # Пытаемся получить доступный кэш
-                if hasattr(portfolio_response, 'virtual_positions'):
-                    virtual_positions = portfolio_response.virtual_positions
-                    for vp in virtual_positions:
-                        if hasattr(vp, 'instrument_type') and vp.instrument_type == 'currency':
-                            self.broker_balance = float(vp.balance.units + vp.balance.nano / 1e9) if hasattr(vp.balance, 'nano') else float(vp.balance.units)
-                            break
-                    else:
-                        self.broker_balance = cash_value
-                else:
-                    self.broker_balance = cash_value
             
-            print(f"Баланс получен от брокера: {self.broker_balance}")
+            # PortfolioResponse имеет total_amount_currencies - это сумма всех валютных позиций
+            # Для получения свободных денег используем total_amount_currencies
+            self.broker_balance = 0.0
+            
+            if hasattr(portfolio_response, 'total_amount_currencies'):
+                total_currencies = portfolio_response.total_amount_currencies
+                if hasattr(total_currencies, 'units'):
+                    nano = getattr(total_currencies, 'nano', 0)
+                    self.broker_balance = float(total_currencies.units) + float(nano) / 1e9
+            
+            # Если balance все еще 0, пробуем найти RUB позицию в positions
+            if self.broker_balance == 0.0 and hasattr(portfolio_response, 'positions'):
+                for pos in portfolio_response.positions:
+                    # instrument_type это строка, сравниваем напрямую
+                    inst_type = getattr(pos, 'instrument_type', '')
+                    # Проверяем тип инструмента - валюта (INSTRUMENT_TYPE_CURRENCY = 3)
+                    if inst_type == 'currency' or inst_type == InstrumentType.INSTRUMENT_TYPE_CURRENCY or \
+                       (hasattr(inst_type, 'value') and inst_type.value == 3):
+                        # Проверяем currency внутри average_position_price или current_price
+                        avg_price = getattr(pos, 'average_position_price', None)
+                        if avg_price and hasattr(avg_price, 'currency'):
+                            curr = avg_price.currency
+                            # Ищем RUB или RUR позиции
+                            if curr in ['RUB', 'RUR']:
+                                quantity = getattr(pos, 'quantity', None)
+                                if quantity and hasattr(quantity, 'units'):
+                                    nano = getattr(quantity, 'nano', 0)
+                                    self.broker_balance = float(quantity.units) + float(nano) / 1e9
+                                    break
+            
+            print(f"Баланс получен от брокера: {self.broker_balance:.2f}")
         except Exception as e:
             print(f"Ошибка при получении баланса от брокера: {e}")
             self.broker_balance = 10000.0  # Значение по умолчанию
