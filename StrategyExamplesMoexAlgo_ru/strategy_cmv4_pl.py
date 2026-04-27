@@ -253,7 +253,8 @@ class StrategyCMV4(bt.Strategy):
         """Приход нового бара тикера"""
         for data in self.datas:
             if not self.p.symbols or data._name in self.p.symbols:
-                ticker = data.p.dataname
+                # Используем _name вместо dataname, так как для PandasData dataname может быть DataFrame
+                ticker = data._name if isinstance(data._name, str) else (data.p.dataname if isinstance(data.p.dataname, str) else str(data.p.dataname))
                 self.log(f'{ticker} - {bt.TimeFrame.Names[data.p.timeframe]} {data.p.compression} - Open={data.open[0]:.2f}, High={data.high[0]:.2f}, Low={data.low[0]:.2f}, Close={data.close[0]:.2f}, Volume={data.volume[0]:.0f}',
                          bt.num2date(data.datetime[0]))
                 
