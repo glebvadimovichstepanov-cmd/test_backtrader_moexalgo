@@ -26,6 +26,10 @@ def load_from_cache(cache_key):
         try:
             with open(cache_file, 'rb') as f:
                 data = pickle.load(f)
+            # Проверяем, не пустой ли это кэш (выходной/праздничный день)
+            if isinstance(data, list) and len(data) == 0:
+                print(f"⚠ Выходной/праздничный день (пустой кэш) для ключа {cache_key[:8]}...")
+                return {'empty': True}
             print(f"✓ Данные загружены из кэша: {cache_file}")
             return data
         except Exception as e:
@@ -67,9 +71,9 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
     if use_cache and not force_update:
         loaded_data = load_from_cache(cache_key)
         if loaded_data is not None:
-            # Если данные загружены из кэша и они пустые - возвращаем результат
-            if isinstance(loaded_data, list) and len(loaded_data) == 0:
-                print(f"⚠ Нет данных в кэше для {symbol} за {date_start.date()}")
+            # Если данные загружены из кэша и они помечены как пустые - это выходной/праздничный день
+            if isinstance(loaded_data, dict) and loaded_data.get('empty'):
+                print(f"⚠ Выходной/праздничный день (пустой кэш) для {symbol} за {date_start.date()}")
                 return {
                     'date': date_start.date(),
                     'start_cash': 100000.0,
@@ -129,11 +133,11 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
                     }
                     data_points.append(point)
                 
-                # Если данных нет вообще - сохраняем пустой кэш и выходим
+                # Если данных нет вообще - сохраняем пустой кэш (помеченный как empty) и выходим
                 if not has_data:
                     print(f"⚠ Нет данных для {symbol} за {date_start.date()}")
                     if use_cache:
-                        save_to_cache(cache_key, [])
+                        save_to_cache(cache_key, {'empty': True})
                     return {
                         'date': date_start.date(),
                         'start_cash': 100000.0,
