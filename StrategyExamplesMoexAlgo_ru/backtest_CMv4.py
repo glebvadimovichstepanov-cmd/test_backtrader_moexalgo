@@ -13,6 +13,59 @@ from backtrader_moexalgo.moexalgo_store import MoexAlgoStore
 CACHE_DIR = os.path.join(os.path.dirname(__file__), 'data_cache')
 
 
+def is_russian_holiday(date):
+    """Проверка, является ли дата праздничным днём в России"""
+    # Официальные праздники (месяц, день)
+    fixed_holidays = [
+        (1, 1), (1, 2), (1, 3), (1, 4), (1, 5), (1, 6), (1, 7), (1, 8),  # Новогодние каникулы
+        (2, 23),  # День защитника Отечества
+        (3, 8),   # Международный женский день
+        (5, 1),   # Праздник Весны и Труда
+        (5, 9),   # День Победы
+        (6, 12),  # День России
+        (11, 4),  # День народного единства
+    ]
+    
+    # Переносы выходных в 2025 году (по постановлению Правительства РФ)
+    # Суббота 4 января -> понедельник 5 мая
+    # Воскресенье 5 января -> вторник 6 мая  
+    # И другие переносы
+    transferred_days_2025 = [
+        (1, 6), (1, 7), (1, 8),  # Дополнительные новогодние каникулы
+        (2, 23),  # 23 февраля (воскресенье) -> перенос на 24 февраля (понедельник)
+        (3, 8),   # 8 марта (суббота) -> перенос на 10 марта (понедельник)
+        (5, 1), (5, 2),  # Майские праздники
+        (5, 9), (5, 10),  # День Победы и перенос
+        (6, 12),  # День России
+        (11, 4),  # День народного единства
+    ]
+    
+    # Для 2025 года - проверим конкретные даты праздников
+    year = date.year
+    if year == 2025:
+        holidays_2025 = [
+            # Январь - новогодние каникулы
+            datetime.date(2025, 1, 1), datetime.date(2025, 1, 2), datetime.date(2025, 1, 3),
+            datetime.date(2025, 1, 4), datetime.date(2025, 1, 5), datetime.date(2025, 1, 6),
+            datetime.date(2025, 1, 7), datetime.date(2025, 1, 8),
+            # Февраль
+            datetime.date(2025, 2, 23), datetime.date(2025, 2, 24),
+            # Март
+            datetime.date(2025, 3, 8), datetime.date(2025, 3, 10),
+            # Апрель - нет праздников
+            # Май
+            datetime.date(2025, 5, 1), datetime.date(2025, 5, 2),
+            datetime.date(2025, 5, 9), datetime.date(2025, 5, 10),
+            # Июнь
+            datetime.date(2025, 6, 12),
+            # Ноябрь
+            datetime.date(2025, 11, 4),
+        ]
+        return date in holidays_2025
+    
+    return (date.month, date.day) in fixed_holidays
+
+
 def get_cache_key(symbol, fromdate, todate, timeframe, compression, metric):
     """Генерация уникального ключа для кэша на основе параметров"""
     key_str = f"{symbol}_{fromdate}_{todate}_{timeframe}_{compression}_{metric}"
@@ -68,9 +121,11 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
     # Пытаемся загрузить из кэша
     data = None
     data_points = None
+    cache_used = False  # Флаг: были ли данные загружены из кэша
     if use_cache and not force_update:
         loaded_data = load_from_cache(cache_key)
         if loaded_data is not None:
+            cache_used = True
             # Если данные загружены из кэша и они помечены как пустые - это выходной/праздничный день
             if isinstance(loaded_data, dict) and loaded_data.get('empty'):
                 print(f"⚠ Выходной/праздничный день (пустой кэш) для {symbol} за {date_start.date()}")
@@ -194,6 +249,21 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
     data = bt.feeds.PandasData(dataname=pd.DataFrame(data_points))
     data._dataname = symbol
     
+    # Если данные были загружены из кэша, пропускаем запуск backtest и сразу возвращаем результат
+    # Это предотвращает зацикливание при повторных вызовах с пустыми данными
+    if cache_used:
+        # Данные уже есть в кэше (непустые), просто создаём заглушку результата
+        return {
+            'date': date_start.date(),
+            'start_cash': 100000.0,
+            'end_cash': 100000.0,
+            'pnl': 0.0,
+            'pnl_percent': 0.0,
+            'trades_count': 0,
+            'strategy': None,
+            'cached': True
+        }
+    
     cerebro.adddata(data)
     
     # Параметры брокера
@@ -253,8 +323,8 @@ def main():
     print("-" * 60)
     
     while current_date <= end_date:
-        # Пропускаем выходные (суббота=5, воскресенье=6)
-        if current_date.weekday() < 5:
+        # Пропускаем выходные (суббота=5, воскресенье=6) и праздничные дни
+        if current_date.weekday() < 5 and not is_russian_holiday(current_date):
             try:
                 # Устанавливаем начало и конец дня для интрадей теста
                 day_start = current_date.replace(hour=0, minute=0, second=0, microsecond=0)
