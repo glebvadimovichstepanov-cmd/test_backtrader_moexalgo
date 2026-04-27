@@ -275,8 +275,18 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
                 if hasattr(data, 'all_history_data') and data.all_history_data:
                     for kline in data.all_history_data:
                         if isinstance(kline, (list, tuple)) and len(kline) >= 6:
+                            # Обрабатываем как Timestamp, так и строковые значения времени
+                            timestamp_val = kline[0]
+                            if isinstance(timestamp_val, str):
+                                # Конвертируем строку в datetime
+                                try:
+                                    timestamp_val = pd.Timestamp(timestamp_val).to_pydatetime()
+                                except:
+                                    from datetime import datetime
+                                    timestamp_val = datetime.fromisoformat(timestamp_val.replace(' ', 'T'))
+                            
                             point = {
-                                'datetime': kline[0],  # Timestamp или строка
+                                'datetime': timestamp_val,
                                 'open': kline[1],
                                 'high': kline[2],
                                 'low': kline[3],
