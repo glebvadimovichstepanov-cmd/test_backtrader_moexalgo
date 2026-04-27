@@ -1,42 +1,45 @@
-# Compiled and build artifacts
-*.pyc
+```
+# Python cache
 __pycache__/
-*.o
-*.obj
-*.so
-*.dll
-*.exe
-*.class
-*.out
+*.pyc
+*.pyo
+*.pyd
 
-# Dependencies
-.venv/
-venv/
+# Data cache
+StrategyExamplesMoexAlgo_ru/data_cache/
+
+# Logs
+*.log
+
+# Environment files
 .env
 .env.local
-.env.*
+*.env.*
 
-# Logs and temp files
-*.log
-*.tmp
-*.swp
-*.swo
-
-# Editors
+# IDE files
 .vscode/
 .idea/
+
+# Temporary files
+*.tmp
+*.swp
 
 # Coverage reports
 coverage/
 htmlcov/
 .coverage
 
-# MyPy cache
-.mypy_cache/
-# Pytest cache
-.pytest_cache/
-
-# Distribution files
-dist/
+# Build directories
 build/
+dist/
 *.egg-info/
+
+# Virtual environments
+venv/
+.venv/
+
+# Dependencies cache
+.pip-tools/
+.mypy_cache/
+.pytest_cache/
+```

@@ -140,7 +140,7 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
                     'cached': True,  # Флаг: данные загружены из кэша
                     'skip_day': True  # Флаг: нужно пропустить этот день в цикле
                 }
-            # Данные успешно загружены из кэша
+            # Данные успешно загружены из кэша - это список точек данных
             data_points = loaded_data
     
     # Если нет в кэше или требуется обновление - загружаем через moexalgo
@@ -248,11 +248,10 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
     
     # Создаем объект data из data_points (из кэша или загруженных)
     import pandas as pd
-    data = bt.feeds.PandasData(dataname=pd.DataFrame(data_points))
-    data._dataname = symbol
     
-    # Если данные были загружены из кэша и они помечены как пустые - пропускаем запуск backtest
-    if cache_used and isinstance(data_points, dict) and data_points.get('empty'):
+    # Проверяем, не являются ли данные пустыми (выходной/праздничный день)
+    # Это может произойти только если мы загрузили данные из API и они пустые
+    if isinstance(data_points, dict) and data_points.get('empty'):
         return {
             'date': date_start.date(),
             'start_cash': 100000.0,
@@ -261,9 +260,28 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
             'pnl_percent': 0.0,
             'trades_count': 0,
             'strategy': None,
-            'cached': True,
+            'cached': cache_used,
             'skip_day': True
         }
+    
+    # Убеждаемся, что data_points - это список данных
+    if not isinstance(data_points, list):
+        print(f"⚠ Неожиданный формат данных: {type(data_points)}")
+        return {
+            'date': date_start.date(),
+            'start_cash': 100000.0,
+            'end_cash': 100000.0,
+            'pnl': 0.0,
+            'pnl_percent': 0.0,
+            'trades_count': 0,
+            'strategy': None,
+            'error': 'invalid_data_format',
+            'cached': cache_used,
+            'skip_day': True
+        }
+    
+    data = bt.feeds.PandasData(dataname=pd.DataFrame(data_points))
+    data._dataname = symbol
     
     cerebro.adddata(data)
     
