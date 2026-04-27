@@ -262,6 +262,7 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
                 timeframe=bt.TimeFrame.Minutes,
                 compression=5,
                 metric='tradestats',  # Используем расширенные данные для интрадея
+                super_candles=False,  # Явно указываем, что не нужны SuperCandles
                 live_bars=False
             )
             
@@ -269,22 +270,22 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
                 # ВАЖНО: Для корректной работы нужно вызвать start() для загрузки данных
                 data.start()
                 
+                # Извлекаем данные напрямую из all_history_data (после start() они там есть)
                 data_points = []
-                has_data = False
+                if hasattr(data, 'all_history_data') and data.all_history_data:
+                    for kline in data.all_history_data:
+                        if isinstance(kline, (list, tuple)) and len(kline) >= 6:
+                            point = {
+                                'datetime': kline[0],  # Timestamp или строка
+                                'open': kline[1],
+                                'high': kline[2],
+                                'low': kline[3],
+                                'close': kline[4],
+                                'volume': kline[5]
+                            }
+                            data_points.append(point)
                 
-                for d in data:
-                    if len(d.open) == 0 or len(d.high) == 0 or len(d.low) == 0 or len(d.close) == 0:
-                        continue
-                    has_data = True
-                    point = {
-                        'datetime': d.datetime[0],
-                        'open': d.open[0],
-                        'high': d.high[0],
-                        'low': d.low[0],
-                        'close': d.close[0],
-                        'volume': d.volume[0]
-                    }
-                    data_points.append(point)
+                has_data = len(data_points) > 0
                 
                 if not has_data:
                     print(f"⚠ Нет данных для {symbol} за {date_start.date()}")
