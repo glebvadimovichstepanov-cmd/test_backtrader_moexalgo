@@ -110,52 +110,76 @@ class MoexAlgoData(DataBase):
 
         if type(kline) == list:  # fix
             timestamp, open_, high, low, close, volume = None, 0.0, 0.0, 0.0, 0.0, 0.0
-            if not self.super_candles:  # если нужны обычные свечи
+            
+            # Проверяем длину списка для определения формата данных
+            # Обычные свечи: [timestamp, open, high, low, close, volume] - 6 элементов
+            # SuperCandles tradestats: 20 элементов
+            # SuperCandles orderstats: 23 элемента  
+            # SuperCandles obstats: 18 элементов
+            
+            if len(kline) == 6 and not self.super_candles:
+                # Обычные свечи: [timestamp, open, high, low, close, volume]
                 timestamp, open_, high, low, close, volume = kline
+            elif self.super_candles and self.metric == 'tradestats' and len(kline) >= 20:
+                datetime_, pr_open, pr_high, pr_low, pr_close, pr_change, trades, vol, val, pr_std, disb, pr_vwap, \
+                    trades_b, vol_b, val_b, pr_vwap_b, trades_s, vol_s, val_s, pr_vwap_s = kline[:20]
+                timestamp = datetime_
+                open_ = pr_open
+                high = pr_high
+                low = pr_low
+                close = pr_close
+                volume = vol
+                _super_candle = {'pr_change': pr_change, 'trades': trades, 'val': val,
+                                 'pr_std': pr_std, 'disb': disb, 'pr_vwap': pr_vwap, 'trades_b': trades_b,
+                                 'vol_b': vol_b, 'val_b': val_b, 'pr_vwap_b': pr_vwap_b,
+                                 'trades_s': trades_s, 'vol_s': vol_s, 'val_s':val_s, 'pr_vwap_s': pr_vwap_s}
+
+            elif self.super_candles and self.metric == 'orderstats' and len(kline) >= 23:
+                datetime_, put_orders, put_orders_b, put_orders_s, put_vol, put_vol_b, put_vol_s, put_val, \
+                    put_val_b, put_val_s, cancel_orders, cancel_orders_b, cancel_orders_s, cancel_vol, \
+                    cancel_vol_b, cancel_vol_s, cancel_val, cancel_val_b, cancel_val_s, put_vwap_b, \
+                    put_vwap_s, cancel_vwap_b, cancel_vwap_s = kline[:23]
+                timestamp = datetime_
+                _super_candle = {'put_orders': put_orders, 'put_orders_b': put_orders_b,
+                                 'put_orders_s': put_orders_s, 'put_vol': put_vol, 'put_vol_b': put_vol_b,
+                                 'put_vol_s': put_vol_s, 'put_val': put_val, 'put_val_b': put_val_b,
+                                 'put_val_s': put_val_s, 'cancel_orders': cancel_orders,
+                                 'cancel_orders_b': cancel_orders_b, 'cancel_orders_s': cancel_orders_s,
+                                 'cancel_vol': cancel_vol,'cancel_vol_b': cancel_vol_b,
+                                 'cancel_vol_s': cancel_vol_s, 'cancel_val': cancel_val,
+                                 'cancel_val_b': cancel_val_b, 'cancel_val_s': cancel_val_s,
+                                 'put_vwap_b': put_vwap_b, 'put_vwap_s': put_vwap_s,
+                                 'cancel_vwap_b': cancel_vwap_b, 'cancel_vwap_s': cancel_vwap_s}
+
+            elif self.super_candles and self.metric == 'obstats' and len(kline) >= 18:
+                datetime_, spread_bbo, spread_lv10, spread_1mio, levels_b, levels_s, vol_b, vol_s, val_b, \
+                    val_s, imbalance_vol_bbo, imbalance_val_bbo, imbalance_vol, imbalance_val, vwap_b, \
+                    vwap_s, vwap_b_1mio, vwap_s_1mio = kline[:18]
+                timestamp = datetime_
+                _super_candle = {'spread_bbo': spread_bbo, 'spread_lv10': spread_lv10, 'spread_1mio': spread_1mio,
+                                 'levels_b': levels_b, 'levels_s': levels_s, 'vol_b': vol_b, 'vol_s': vol_s,
+                                 'val_b': val_b, 'val_s': val_s, 'imbalance_vol_bbo': imbalance_vol_bbo,
+                                 'imbalance_val_bbo': imbalance_val_bbo, 'imbalance_vol': imbalance_vol,
+                                 'imbalance_val': imbalance_val, 'vwap_b': vwap_b, 'vwap_s': vwap_s,
+                                 'vwap_b_1mio': vwap_b_1mio, 'vwap_s_1mio': vwap_s_1mio}
             else:
-                if self.metric == 'tradestats':
-                    datetime_, pr_open, pr_high, pr_low, pr_close, pr_change, trades, vol, val, pr_std, disb, pr_vwap, \
-                        trades_b, vol_b, val_b, pr_vwap_b, trades_s, vol_s, val_s, pr_vwap_s = kline
-                    timestamp = datetime_
-                    open_ = pr_open
-                    high = pr_high
-                    low = pr_low
-                    close = pr_close
-                    volume = vol
-                    _super_candle = {'pr_change': pr_change, 'trades': trades, 'val': val,
-                                     'pr_std': pr_std, 'disb': disb, 'pr_vwap': pr_vwap, 'trades_b': trades_b,
-                                     'vol_b': vol_b, 'val_b': val_b, 'pr_vwap_b': pr_vwap_b,
-                                     'trades_s': trades_s, 'vol_s': vol_s, 'val_s':val_s, 'pr_vwap_s': pr_vwap_s}
+                # Если длина не соответствует ожидаемой, пробуем обработать как обычные свечи
+                # Это может произойти при переключении с super_candles на обычные свечи
+                if len(kline) >= 6:
+                    timestamp, open_, high, low, close, volume = kline[0], kline[1], kline[2], kline[3], kline[4], kline[5]
+                else:
+                    return False
 
-                if self.metric == 'orderstats':
-                    datetime_, put_orders, put_orders_b, put_orders_s, put_vol, put_vol_b, put_vol_s, put_val, \
-                        put_val_b, put_val_s, cancel_orders, cancel_orders_b, cancel_orders_s, cancel_vol, \
-                        cancel_vol_b, cancel_vol_s, cancel_val, cancel_val_b, cancel_val_s, put_vwap_b, \
-                        put_vwap_s, cancel_vwap_b, cancel_vwap_s = kline
-                    timestamp = datetime_
-                    _super_candle = {'put_orders': put_orders, 'put_orders_b': put_orders_b,
-                                     'put_orders_s': put_orders_s, 'put_vol': put_vol, 'put_vol_b': put_vol_b,
-                                     'put_vol_s': put_vol_s, 'put_val': put_val, 'put_val_b': put_val_b,
-                                     'put_val_s': put_val_s, 'cancel_orders': cancel_orders,
-                                     'cancel_orders_b': cancel_orders_b, 'cancel_orders_s': cancel_orders_s,
-                                     'cancel_vol': cancel_vol,'cancel_vol_b': cancel_vol_b,
-                                     'cancel_vol_s': cancel_vol_s, 'cancel_val': cancel_val,
-                                     'cancel_val_b': cancel_val_b, 'cancel_val_s': cancel_val_s,
-                                     'put_vwap_b': put_vwap_b, 'put_vwap_s': put_vwap_s,
-                                     'cancel_vwap_b': cancel_vwap_b, 'cancel_vwap_s': cancel_vwap_s}
-
-                if self.metric == 'obstats':
-                    datetime_, spread_bbo, spread_lv10, spread_1mio, levels_b, levels_s, vol_b, vol_s, val_b, \
-                        val_s, imbalance_vol_bbo, imbalance_val_bbo, imbalance_vol, imbalance_val, vwap_b, \
-                        vwap_s, vwap_b_1mio, vwap_s_1mio = kline
-                    timestamp = datetime_
-                    _super_candle = {'spread_bbo': spread_bbo, 'spread_lv10': spread_lv10, 'spread_1mio': spread_1mio,
-                                     'levels_b': levels_b, 'levels_s': levels_s, 'vol_b': vol_b, 'vol_s': vol_s,
-                                     'val_b': val_b, 'val_s': val_s, 'imbalance_vol_bbo': imbalance_vol_bbo,
-                                     'imbalance_val_bbo': imbalance_val_bbo, 'imbalance_vol': imbalance_vol,
-                                     'imbalance_val': imbalance_val, 'vwap_b': vwap_b, 'vwap_s': vwap_s,
-                                     'vwap_b_1mio': vwap_b_1mio, 'vwap_s_1mio': vwap_s_1mio}
-
+            # Конвертация timestamp в datetime
+            if isinstance(timestamp, str):
+                # Строка формата '2025-04-28 06:50:00'
+                try:
+                    timestamp = pd.Timestamp(timestamp).to_pydatetime()
+                except:
+                    timestamp = datetime.fromisoformat(timestamp.replace(' ', 'T'))
+            elif isinstance(timestamp, pd.Timestamp):
+                timestamp = timestamp.to_pydatetime()
+            
             self.lines.datetime[0] = date2num(timestamp) if isinstance(timestamp, datetime) else date2num(datetime.fromisoformat(str(timestamp).replace(' ', 'T')))
             self.lines.open[0] = open_
             self.lines.high[0] = high
