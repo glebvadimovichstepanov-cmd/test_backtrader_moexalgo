@@ -251,10 +251,8 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
     data = bt.feeds.PandasData(dataname=pd.DataFrame(data_points))
     data._dataname = symbol
     
-    # Если данные были загружены из кэша, пропускаем запуск backtest и сразу возвращаем результат
-    # Это предотвращает зацикливание при повторных вызовах с пустыми данными
-    if cache_used:
-        # Данные уже есть в кэше (непустые), просто создаём заглушку результата
+    # Если данные были загружены из кэша и они помечены как пустые - пропускаем запуск backtest
+    if cache_used and isinstance(data_points, dict) and data_points.get('empty'):
         return {
             'date': date_start.date(),
             'start_cash': 100000.0,
@@ -263,7 +261,8 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
             'pnl_percent': 0.0,
             'trades_count': 0,
             'strategy': None,
-            'cached': True
+            'cached': True,
+            'skip_day': True
         }
     
     cerebro.adddata(data)
