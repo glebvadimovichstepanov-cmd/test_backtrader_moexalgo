@@ -61,6 +61,38 @@ def get_account_id(token):
         return None
 
 
+def get_figi_for_ticker(token, ticker):
+    """Получить FIGI для тикера через T-Invest API"""
+    try:
+        with Client(token) as client:
+            # Используем instruments.find_instrument для поиска инструмента по тикуру
+            # Метод возвращает список найденных инструментов
+            instruments_response = client.instruments.find_instrument(query=ticker)
+            
+            if hasattr(instruments_response, 'instruments') and instruments_response.instruments:
+                # Берем первый найденный инструмент
+                instrument = instruments_response.instruments[0]
+                figi = getattr(instrument, 'figi', None)
+                instrument_uid = getattr(instrument, 'uid', None)
+                
+                print(f"Найден инструмент для {ticker}: FIGI={figi}, UID={instrument_uid}")
+                
+                # Возвращаем instrument_uid (предпочтительно для нового API) или FIGI
+                if instrument_uid:
+                    return instrument_uid
+                elif figi:
+                    return figi
+                else:
+                    print(f"Не удалось получить FIGI или UID для {ticker}")
+                    return None
+            else:
+                print(f"Инструмент {ticker} не найден")
+                return None
+    except Exception as e:
+        print(f"Ошибка при поиске инструмента {ticker}: {e}")
+        return None
+
+
 def execute_with_client(func):
     """Хелпер для выполнения операций с клиентом в контекстном менеджере"""
     token = get_tinkoff_token()
@@ -113,6 +145,18 @@ class RSIStrategy(bt.Strategy):
             self.account_id = get_account_id(INVEST_TOKEN)
             if not self.account_id:
                 raise ValueError("Не удалось получить account_id. Проверьте токен и статус счетов.")
+        
+        # Получаем FIGI/UID для каждого тикера и сохраняем в словаре
+        self.ticker_to_instrument_id = {}
+        for d in self.datas:
+            ticker = d._name
+            instrument_id = get_figi_for_ticker(INVEST_TOKEN, ticker)
+            if instrument_id:
+                self.ticker_to_instrument_id[ticker] = instrument_id
+                print(f"Тикер {ticker} -> Instrument ID: {instrument_id}")
+            else:
+                print(f"Предупреждение: Не удалось получить instrument_id для {ticker}")
+                self.ticker_to_instrument_id[ticker] = ticker  # Используем тикер как запасной вариант
         
         # Получаем начальный баланс с брокера
         self._update_broker_balance()
@@ -206,12 +250,16 @@ class RSIStrategy(bt.Strategy):
                     print(f" - free_money: {free_money}")
                     print(f" - account_id: {self.account_id}")
 
+                    # Получаем instrument_id (FIGI или UID) для тикера
+                    instrument_id = self.ticker_to_instrument_id.get(ticker, ticker)
+                    print(f" - instrument_id: {instrument_id}")
+
                     # Выставляем заявку на покупку по рынку
                     # Документация T-Invest API: https://opensource.tbank.ru/invest/invest-python
                     # Для маркет-ордеров time_in_force не требуется
                     def post_buy_order(client):
                         return client.orders.post_order(
-                            instrument_id=ticker,
+                            instrument_id=instrument_id,
                             quantity=1,
                             direction=OrderDirection.ORDER_DIRECTION_BUY,
                             account_id=self.account_id,
@@ -227,6 +275,10 @@ class RSIStrategy(bt.Strategy):
                             print(f"⚠️ Ошибка 90001: Требуется подтверждение сделки!")
                             print("   Откройте приложение Т-Инвестиций и подтвердите сессию/сделку.")
                             print("   После подтверждения перезапустите скрипт.")
+                        elif "50002" in error_msg or "Instrument not found" in error_msg:
+                            print(f"⚠️ Ошибка 50002: Инструмент не найден!")
+                            print(f"   Тикер: {ticker}, instrument_id: {instrument_id}")
+                            print("   Попробуйте использовать FIGI или UID инструмента вместо тикера.")
                         else:
                             print(f"Ошибка при выставлении заявки: {e}")
                         continue
@@ -246,11 +298,15 @@ class RSIStrategy(bt.Strategy):
                             print("sell")
                             print(f"\t - Продаём по рынку {data._name}...")
 
+                            # Получаем instrument_id (FIGI или UID) для тикера
+                            instrument_id = self.ticker_to_instrument_id.get(ticker, ticker)
+                            print(f" - instrument_id: {instrument_id}")
+
                             # Выставляем заявку на продажу по рынку
                             # Документация T-Invest API: https://opensource.tbank.ru/invest/invest-python
                             def post_sell_order(client):
                                 return client.orders.post_order(
-                                    instrument_id=ticker,
+                                    instrument_id=instrument_id,
                                     quantity=1,
                                     direction=OrderDirection.ORDER_DIRECTION_SELL,
                                     account_id=self.account_id,
@@ -266,6 +322,10 @@ class RSIStrategy(bt.Strategy):
                                     print(f"⚠️ Ошибка 90001: Требуется подтверждение сделки!")
                                     print("   Откройте приложение Т-Инвестиций и подтвердите сессию/сделку.")
                                     print("   После подтверждения перезапустите скрипт.")
+                                elif "50002" in error_msg or "Instrument not found" in error_msg:
+                                    print(f"⚠️ Ошибка 50002: Инструмент не найден!")
+                                    print(f"   Тикер: {ticker}, instrument_id: {instrument_id}")
+                                    print("   Попробуйте использовать FIGI или UID инструмента вместо тикера.")
                                 else:
                                     print(f"Ошибка при выставлении заявки: {e}")
                                 continue
