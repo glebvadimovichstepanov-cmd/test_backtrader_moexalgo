@@ -108,6 +108,53 @@ class RSIStrategy(bt.Strategy):
             self.account_id = get_account_id(INVEST_TOKEN)
             if not self.account_id:
                 raise ValueError("Не удалось получить account_id. Проверьте токен и статус счетов.")
+        
+        # Получаем начальный баланс с брокера
+        self._update_broker_balance()
+
+    def _update_broker_balance(self):
+        """Получить актуальный баланс свободного капитала от брокера"""
+        try:
+            portfolio_response = self.client.operations.get_portfolio(account_id=self.account_id)
+            if hasattr(portfolio_response, 'total_amount_bonds'):
+                # Для нового API t_tech.invest
+                total_value = float(portfolio_response.total_amount_bonds.units + portfolio_response.total_amount_bonds.nano / 1e9) if hasattr(portfolio_response.total_amount_bonds, 'nano') else float(portfolio_response.total_amount_bonds.units)
+                cash_value = float(portfolio_response.total_amount_currencies.units + portfolio_response.total_amount_currencies.nano / 1e9) if hasattr(portfolio_response.total_amount_currencies, 'nano') else float(portfolio_response.total_amount_currencies.units)
+                
+                # Свободные деньги - это доступный остаток на счете
+                if hasattr(portfolio_response, 'available_cash'):
+                    self.broker_balance = float(portfolio_response.available_cash.units + portfolio_response.available_cash.nano / 1e9) if hasattr(portfolio_response.available_cash, 'nano') else float(portfolio_response.available_cash.units)
+                else:
+                    # Если available_cash нет, используем cash из портфеля
+                    self.broker_balance = cash_value
+            else:
+                # Альтернативная структура ответа
+                positions = portfolio_response.positions if hasattr(portfolio_response, 'positions') else []
+                total_portfolio_value = 0
+                cash_value = 0
+                
+                for pos in positions:
+                    if hasattr(pos, 'instrument_type') and pos.instrument_type == 'currency':
+                        cash_value += float(pos.balance.units + pos.balance.nano / 1e9) if hasattr(pos.balance, 'nano') else float(pos.balance.units)
+                    else:
+                        total_portfolio_value += float(pos.balance.units * pos.average_position_price.units) if hasattr(pos, 'average_position_price') else 0
+                
+                # Пытаемся получить доступный кэш
+                if hasattr(portfolio_response, 'virtual_positions'):
+                    virtual_positions = portfolio_response.virtual_positions
+                    for vp in virtual_positions:
+                        if hasattr(vp, 'instrument_type') and vp.instrument_type == 'currency':
+                            self.broker_balance = float(vp.balance.units + vp.balance.nano / 1e9) if hasattr(vp.balance, 'nano') else float(vp.balance.units)
+                            break
+                    else:
+                        self.broker_balance = cash_value
+                else:
+                    self.broker_balance = cash_value
+            
+            print(f"Баланс получен от брокера: {self.broker_balance}")
+        except Exception as e:
+            print(f"Ошибка при получении баланса от брокера: {e}")
+            self.broker_balance = 10000.0  # Значение по умолчанию
 
     def next(self):
         """Приход нового бара тикера"""
@@ -145,10 +192,12 @@ class RSIStrategy(bt.Strategy):
 
                 if status != 0: continue  # если не live - то не входим в позицию!
 
-                print(f"\t - Free balance: {self.broker.getcash()}")
+                # Обновляем баланс от брокера перед использованием
+                self._update_broker_balance()
+                print(f"\t - Free balance: {self.broker_balance}")
 
                 if not self.buy_once[ticker]:  # Enter long
-                    free_money = self.broker.getcash()
+                    free_money = self.broker_balance
                     print(f" - free_money: {free_money}")
                     print(f" - account_id: {self.account_id}")
 
