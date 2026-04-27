@@ -50,8 +50,6 @@ def get_account_id(token):
                 print("Внимание: список счетов пуст или имеет неверный формат")
                 return None
             for acc in accounts_response.accounts:
-                # Проверяем статус счета - ищем открытый счет
-                # AccountStatus.ACCOUNT_STATUS_OPEN = 2
                 from t_tech.invest import AccountStatus
                 status_value = acc.status.value if hasattr(acc.status, 'value') else str(acc.status)
                 print(f"Проверка счета {acc.id}, статус: {status_value} ({acc.status})")
@@ -78,19 +76,14 @@ def get_figi_for_ticker(token, ticker, class_code=None):
     """
     try:
         with Client(token) as client:
-            # Используем instruments.find_instrument для поиска инструмента по тикуру
             instruments_response = client.instruments.find_instrument(query=ticker)
             
             if hasattr(instruments_response, 'instruments') and instruments_response.instruments:
-                # Ищем инструмент с ТОЧНЫМ совпадением тикера и FIGI формата BBG...
                 for instrument in instruments_response.instruments:
                     inst_ticker = getattr(instrument, 'ticker', None)
                     figi = getattr(instrument, 'figi', None)
                     
-                    # Строгое сравнение тикеров - должно полностью совпадать
-                    # Это критично чтобы избежать путаницы между SNGS и SNGSP
                     if inst_ticker == ticker and figi and figi.startswith('BBG'):
-                        # Если указан class_code, проверяем совпадение
                         if class_code is not None:
                             inst_class_code = getattr(instrument, 'class_code', None)
                             if inst_class_code == class_code:
@@ -98,20 +91,18 @@ def get_figi_for_ticker(token, ticker, class_code=None):
                         else:
                             return figi
                 
-                # Если не нашли с class_code, пробуем без него (но все равно с точным совпадением тикера)
                 if class_code is not None:
-                    print(f"⚠️ Не найден инструмент {ticker} с class_code={class_code}, пробуем без class_code")
+                    print(f"Не найден инструмент {ticker} с class_code={class_code}, пробуем без class_code")
                     for instrument in instruments_response.instruments:
                         inst_ticker = getattr(instrument, 'ticker', None)
                         figi = getattr(instrument, 'figi', None)
                         if inst_ticker == ticker and figi and figi.startswith('BBG'):
                             return figi
                 
-                # Если не нашли BBG FIGI с точным совпадением тикера, возвращаем None
-                print(f"❌ Не найден инструмент с точным совпадением тикера {ticker} и FIGI формата BBG...")
+                print(f"Не найден инструмент с точным совпадением тикера {ticker} и FIGI формата BBG...")
                 return None
             else:
-                print(f"❌ Инструменты не найдены для запроса: {ticker}")
+                print(f"Инструменты не найдены для запроса: {ticker}")
                 return None
     except Exception as e:
         print(f"Ошибка при поиске инструмента {ticker}: {e}")
@@ -127,7 +118,6 @@ def print_positions_info(token, account_id):
     """
     try:
         with Client(token) as client:
-            # Получаем портфель
             portfolio_response = client.operations.get_portfolio(account_id=account_id)
             
             print("\n" + "="*70)
@@ -142,7 +132,6 @@ def print_positions_info(token, account_id):
             total_value = 0.0
             
             for pos in portfolio_response.positions:
-                # Получаем информацию об инструменте
                 instrument_uid = getattr(pos, 'instrument_uid', None)
                 figi_from_pos = getattr(pos, 'figi', None)
                 
@@ -153,7 +142,6 @@ def print_positions_info(token, account_id):
                 else:
                     lots = 0.0
                 
-                # Получаем текущую цену
                 current_price = getattr(pos, 'current_price', None)
                 price_value = 0.0
                 currency = 'RUB'
@@ -168,37 +156,27 @@ def print_positions_info(token, account_id):
                 position_value = lots * price_value
                 total_value += position_value
                 
-                # Пытаемся получить тикер и FIGI через онлайн запросы
                 ticker = 'N/A'
                 figi = 'N/A'
                 
-                # Сначала пробуем найти по UID (это наиболее надежный идентификатор в новом API)
                 if instrument_uid:
                     inst_info = get_instrument_by_uid(token, instrument_uid)
                     if inst_info:
                         ticker = inst_info.get('ticker', 'N/A')
                         figi = inst_info.get('figi', 'N/A')
                 
-                # Если не нашли по UID, пробуем по FIGI из позиции
                 if ticker == 'N/A' and figi_from_pos:
                     inst_info = get_instrument_by_figi(token, figi_from_pos)
                     if inst_info:
                         ticker = inst_info.get('ticker', 'N/A')
                         figi = figi_from_pos
                 
-                # Если все еще не нашли, пробуем найти по тикуру через find_instrument
                 if ticker == 'N/A':
-                    # Пробуем использовать class_code для более точного поиска
                     try:
-                        # Получаем информацию о тикере из позиции - может быть в instrument_type
-                        inst_type = getattr(pos, 'instrument_type', '')
-                        # Если есть тип инструмента, можно попробовать использовать его для уточнения поиска
-                        # Но пока просто ищем по первому доступному идентификатору
                         search_id = instrument_uid if instrument_uid else figi_from_pos
                         if search_id:
                             inst_response = client.instruments.find_instrument(query=search_id)
                             if hasattr(inst_response, 'instruments') and inst_response.instruments:
-                                # Ищем точное совпадение по UID или FIGI
                                 for inst in inst_response.instruments:
                                     inst_uid = getattr(inst, 'uid', None)
                                     inst_figi = getattr(inst, 'figi', None)
@@ -207,7 +185,7 @@ def print_positions_info(token, account_id):
                                         figi = getattr(inst, 'figi', search_id)
                                         break
                     except Exception as e:
-                        logger.debug(f"Не удалось найти инструмент через find_instrument: {e}")
+                        pass
                 
                 print(f"Тикер: {ticker:10} | FIGI: {figi:20} | Лотов: {lots:12.2f} | Цена: {price_value:12.4f} {currency:4} | Стоимость: {position_value:12.2f} {currency}")
             
@@ -231,31 +209,31 @@ def execute_with_client(func):
 # Торговая система
 class RSIStrategy(bt.Strategy):
     """
-    Демонстрация live стратегии - однократно покупаем по рынку 1 лот и однократно продаем его по рынку через 3 бара
+    Демонстрация live стратегии - однократно покупаем по рынку 1 лот 
+    и однократно продаем его по рынку через 3 бара
     """
-    params = (  # Параметры торговой системы
+    params = (
         ('timeframe', ''),
-        ('live_prefix', ''),  # префикс для выставления заявок в live
-        ('info_tickers', []),  # информация по тикерам
-        ('tb_client', ''),  # Коннект к Tbank API - для выставления заявок на покупку/продажу
-        ('account_id', ''),  # id счета
+        ('live_prefix', ''),
+        ('info_tickers', []),
+        ('tb_client', ''),
+        ('account_id', ''),
     )
 
     def __init__(self):
         """Инициализация, добавление индикаторов для каждого тикера"""
-        self.orders = {}  # Организовываем заявки в виде справочника, конкретно для этой стратегии один тикер - одна активная заявка
-        for d in self.datas:  # Пробегаемся по всем тикерам
-            self.orders[d._name] = None  # Заявки по тикеру пока нет
+        self.orders = {}
+        for d in self.datas:
+            self.orders[d._name] = None
 
-        # создаем индикаторы для каждого тикера
         self.sma1 = {}
         self.sma2 = {}
         self.rsi = {}
         for i in range(len(self.datas)):
-            ticker = list(self.dnames.keys())[i]    # key name is ticker name
-            self.sma1[ticker] = bt.indicators.SMA(self.datas[i], period=8)  # SMA indicator
-            self.sma2[ticker] = bt.indicators.SMA(self.datas[i], period=16)  # SMA indicator
-            self.rsi[ticker] = bt.indicators.RSI(self.datas[i], period=14)  # RSI indicator
+            ticker = list(self.dnames.keys())[i]
+            self.sma1[ticker] = bt.indicators.SMA(self.datas[i], period=8)
+            self.sma2[ticker] = bt.indicators.SMA(self.datas[i], period=16)
+            self.rsi[ticker] = bt.indicators.RSI(self.datas[i], period=14)
 
         self.buy_once = {}
         self.sell_once = {}
@@ -419,15 +397,7 @@ class RSIStrategy(bt.Strategy):
                     print(f" - instrument_id: {instrument_id} (FIGI из store.get_symbol_info)")
 
                     # Выставляем заявку на покупку по рынку
-                    # Документация T-Invest API: https://opensource.tbank.ru/invest/invest-python
-                    # Для маркет-ордеров time_in_force не требуется
                     def post_buy_order(client):
-                        print(f"\n[DEBUG] POST /orders/postOrder:")
-                        print(f"  instrument_id: {instrument_id}")
-                        print(f"  quantity: 1")
-                        print(f"  direction: ORDER_DIRECTION_BUY")
-                        print(f"  account_id: {self.account_id}")
-                        print(f"  order_type: ORDER_TYPE_MARKET")
                         return client.orders.post_order(
                             instrument_id=instrument_id,
                             quantity=1,
@@ -442,15 +412,15 @@ class RSIStrategy(bt.Strategy):
                     except Exception as e:
                         error_msg = str(e)
                         if "90001" in error_msg or "Need confirmation" in error_msg:
-                            print(f"⚠️ Ошибка 90001: Требуется подтверждение сделки!")
+                            print("Ошибка 90001: Требуется подтверждение сделки!")
                             print("   Откройте приложение Т-Инвестиций и подтвердите сессию/сделку.")
                             print("   После подтверждения перезапустите скрипт.")
                         elif "50002" in error_msg or "Instrument not found" in error_msg:
-                            print(f"⚠️ Ошибка 50002: Инструмент не найден!")
+                            print("Ошибка 50002: Инструмент не найден!")
                             print(f"   Тикер: {ticker}, instrument_id: {instrument_id}")
                             print("   Попробуйте использовать FIGI или UID инструмента вместо тикера.")
                         elif "30052" in error_msg or "Instrument forbidden for trading by API" in error_msg:
-                            print(f"⚠️ Ошибка 30052: Инструмент запрещен для торговли через API!")
+                            print("Ошибка 30052: Инструмент запрещен для торговли через API!")
                             print(f"   Тикер: {ticker}, instrument_id: {instrument_id}")
                             print("   Возможные причины:")
                             print("   - Ограничения брокера или ЦБ РФ для данного инструмента")
@@ -465,9 +435,7 @@ class RSIStrategy(bt.Strategy):
                     print("\t - order_id:", response.order_id)
                     print("\t - время:", self.order_time)
 
-                    # print(f"\t - Выставлена заявка {self.orders[data._name]} на покупку {data._name}")
-
-                    self.buy_once[ticker] = len(self)  # для однократной покупки + записываем номер бара
+                    self.buy_once[ticker] = len(self)
 
                 else:  # Если есть позиция, т.к. покупаем сразу по рынку
                     print(self.sell_once[ticker], self.buy_once[ticker], len(self), len(self) > self.buy_once[ticker] + 3)
@@ -486,14 +454,7 @@ class RSIStrategy(bt.Strategy):
                             print(f" - instrument_id: {instrument_id} (FIGI из store.get_symbol_info)")
 
                             # Выставляем заявку на продажу по рынку
-                            # Документация T-Invest API: https://opensource.tbank.ru/invest/invest-python
                             def post_sell_order(client):
-                                print(f"\n[DEBUG] POST /orders/postOrder:")
-                                print(f"  instrument_id: {instrument_id}")
-                                print(f"  quantity: 1")
-                                print(f"  direction: ORDER_DIRECTION_SELL")
-                                print(f"  account_id: {self.account_id}")
-                                print(f"  order_type: ORDER_TYPE_MARKET")
                                 return client.orders.post_order(
                                     instrument_id=instrument_id,
                                     quantity=1,
@@ -508,15 +469,15 @@ class RSIStrategy(bt.Strategy):
                             except Exception as e:
                                 error_msg = str(e)
                                 if "90001" in error_msg or "Need confirmation" in error_msg:
-                                    print(f"⚠️ Ошибка 90001: Требуется подтверждение сделки!")
+                                    print("Ошибка 90001: Требуется подтверждение сделки!")
                                     print("   Откройте приложение Т-Инвестиций и подтвердите сессию/сделку.")
                                     print("   После подтверждения перезапустите скрипт.")
                                 elif "50002" in error_msg or "Instrument not found" in error_msg:
-                                    print(f"⚠️ Ошибка 50002: Инструмент не найден!")
+                                    print("Ошибка 50002: Инструмент не найден!")
                                     print(f"   Тикер: {ticker}, instrument_id: {instrument_id}")
                                     print("   Попробуйте использовать FIGI или UID инструмента вместо тикера.")
                                 elif "30052" in error_msg or "Instrument forbidden for trading by API" in error_msg:
-                                    print(f"⚠️ Ошибка 30052: Инструмент запрещен для торговли через API!")
+                                    print("Ошибка 30052: Инструмент запрещен для торговли через API!")
                                     print(f"   Тикер: {ticker}, instrument_id: {instrument_id}")
                                     print("   Возможные причины:")
                                     print("   - Ограничения брокера или ЦБ РФ для данного инструмента")
@@ -532,7 +493,7 @@ class RSIStrategy(bt.Strategy):
                             print("\t - order_id:", response.order_id)
                             print("\t - время:", self.order_time)
 
-                            self.sell_once[ticker] = True  # для предотвращения повторной продажи
+                            self.sell_once[ticker] = True
 
     def notify_order(self, order):
         """Изменение статуса заявки"""
