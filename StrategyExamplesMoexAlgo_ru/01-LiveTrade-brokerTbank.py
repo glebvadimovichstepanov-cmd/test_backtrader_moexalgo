@@ -77,37 +77,102 @@ def get_figi_for_ticker(token, ticker, class_code=None):
             # Используем instruments.find_instrument для поиска инструмента по тикуру
             instruments_response = client.instruments.find_instrument(query=ticker)
             
-            print(f"\n[DEBUG] Поиск FIGI для '{ticker}' (class_code={class_code}): найдено {len(instruments_response.instruments) if hasattr(instruments_response, 'instruments') else 0} совпадений:")
-            
             if hasattr(instruments_response, 'instruments') and instruments_response.instruments:
                 # Ищем инструмент с FIGI формата BBG... (требуется для post_order)
                 for instrument in instruments_response.instruments:
                     figi = getattr(instrument, 'figi', None)
-                    uid = getattr(instrument, 'uid', 'N/A')
-                    name = getattr(instrument, 'name', 'N/A')
-                    inst_type = getattr(instrument, 'type', 'N/A')
-                    
-                    print(f"  - Name: {name}, Ticker: {ticker}, FIGI: {figi}, UID: {uid}, Type: {inst_type}")
-                    
-                    # Если указан class_code, ищем точное совпадение
-                    if class_code is not None:
-                        # В t_tech.invest нет поля class_code в Instrument, поэтому используем первое совпадение с BBG FIGI
-                        pass
                     
                     # Возвращаем только FIGI в формате BBG... (требуется для post_order)
                     if figi and figi.startswith('BBG'):
-                        print(f"  ✅ Выбран FIGI: {figi}")
                         return figi
                 
-                # Если не нашли BBG FIGI, выводим все найденные варианты для отладки
-                print(f"  ❌ Не найдено FIGI формата BBG... для {ticker}")
+                # Если не нашли BBG FIGI, возвращаем None
                 return None
             else:
-                print(f"  ❌ Инструмент {ticker} не найден")
                 return None
     except Exception as e:
         print(f"Ошибка при поиске инструмента {ticker}: {e}")
         return None
+
+
+def print_positions_info(token, account_id):
+    """Вывод информации о позициях на счете: тикеры, FIGI, лоты, стоимость
+    
+    Args:
+        token: Токен доступа к T-Invest API
+        account_id: ID счета
+    """
+    try:
+        with Client(token) as client:
+            # Получаем портфель
+            portfolio_response = client.operations.get_portfolio(account_id=account_id)
+            
+            print("\n" + "="*70)
+            print("ПОЗИЦИИ НА СЧЕТЕ {}".format(account_id))
+            print("="*70)
+            
+            if not hasattr(portfolio_response, 'positions') or not portfolio_response.positions:
+                print("Позиции не найдены")
+                print("="*70 + "\n")
+                return
+            
+            total_value = 0.0
+            
+            for pos in portfolio_response.positions:
+                # Получаем информацию об инструменте
+                instrument_id = getattr(pos, 'instrument_uid', None)
+                if not instrument_id:
+                    instrument_id = getattr(pos, 'figi', 'N/A')
+                
+                quantity = getattr(pos, 'quantity', None)
+                if quantity and hasattr(quantity, 'units'):
+                    nano = getattr(quantity, 'nano', 0)
+                    lots = float(quantity.units) + float(nano) / 1e9
+                else:
+                    lots = 0.0
+                
+                # Получаем текущую цену
+                current_price = getattr(pos, 'current_price', None)
+                price_value = 0.0
+                currency = 'RUB'
+                if current_price:
+                    units = getattr(current_price, 'units', 0)
+                    nano = getattr(current_price, 'nano', 0)
+                    price_value = float(units) + float(nano) / 1e9
+                    curr_obj = getattr(current_price, 'currency', None)
+                    if curr_obj:
+                        currency = str(curr_obj)
+                
+                position_value = lots * price_value
+                total_value += position_value
+                
+                # Пытаемся получить тикер через instruments.find_instrument по FIGI/UID
+                ticker = 'N/A'
+                figi = 'N/A'
+                try:
+                    # Пробуем найти инструмент по UID
+                    if instrument_id and not instrument_id.startswith('BBG'):
+                        # Это UID, пробуем найти через get_account_instruments или оставляем как есть
+                        pass
+                    elif instrument_id and instrument_id.startswith('BBG'):
+                        figi = instrument_id
+                        # Можем попробовать найти тикер через find_instrument
+                        inst_response = client.instruments.find_instrument(query=instrument_id)
+                        if hasattr(inst_response, 'instruments') and inst_response.instruments:
+                            inst = inst_response.instruments[0]
+                            ticker = getattr(inst, 'ticker', 'N/A')
+                            figi = getattr(inst, 'figi', instrument_id)
+                except:
+                    pass
+                
+                print(f"Тикер: {ticker:10} | FIGI: {figi:20} | Лотов: {lots:12.2f} | Цена: {price_value:12.4f} {currency:4} | Стоимость: {position_value:12.2f} {currency}")
+            
+            print("-"*70)
+            print(f"ОБЩАЯ СТОИМОСТЬ ПОЗИЦИЙ: {total_value:.2f} RUB")
+            print("="*70 + "\n")
+            
+    except Exception as e:
+        print(f"Ошибка при получении информации о позициях: {e}")
 
 
 def execute_with_client(func):
@@ -162,6 +227,9 @@ class RSIStrategy(bt.Strategy):
             self.account_id = get_account_id(INVEST_TOKEN)
             if not self.account_id:
                 raise ValueError("Не удалось получить account_id. Проверьте токен и статус счетов.")
+        
+        # Выводим информацию о позициях на счете при инициализации
+        print_positions_info(INVEST_TOKEN, self.account_id)
         
         # Получаем FIGI для каждого тикера через store.get_symbol_info()
         # Формат: self.figi = self.store.provider.get_symbol_info(self.class_code, self.symbol).figi
