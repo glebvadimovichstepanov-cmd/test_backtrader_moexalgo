@@ -70,18 +70,24 @@ def get_figi_for_ticker(token, ticker):
             instruments_response = client.instruments.find_instrument(query=ticker)
             
             if hasattr(instruments_response, 'instruments') and instruments_response.instruments:
-                # Берем первый найденный инструмент
-                instrument = instruments_response.instruments[0]
-                figi = getattr(instrument, 'figi', None)
+                # Ищем инструмент с FIGI формата BBG... (требуется для post_order)
+                for instrument in instruments_response.instruments:
+                    figi = getattr(instrument, 'figi', None)
+                    
+                    # Возвращаем только FIGI в формате BBG... (требуется для post_order)
+                    if figi and figi.startswith('BBG'):
+                        print(f"Найден инструмент для {ticker}: FIGI={figi}")
+                        return figi
                 
-                print(f"Найден инструмент для {ticker}: FIGI={figi}")
+                # Если не нашли BBG FIGI, выводим все найденные варианты для отладки
+                print(f"Не найдено FIGI формата BBG... для {ticker}. Найдены инструменты:")
+                for i, inst in enumerate(instruments_response.instruments[:5]):
+                    figi = getattr(inst, 'figi', 'N/A')
+                    uid = getattr(inst, 'uid', 'N/A')
+                    name = getattr(inst, 'name', 'N/A')
+                    print(f"  [{i}] FIGI={figi}, UID={uid}, Name={name}")
                 
-                # Возвращаем только FIGI в формате BBG... (требуется для post_order)
-                if figi and figi.startswith('BBG'):
-                    return figi
-                else:
-                    print(f"Не удалось получить FIGI для {ticker} (получено: {figi})")
-                    return None
+                return None
             else:
                 print(f"Инструмент {ticker} не найден")
                 return None
@@ -150,10 +156,10 @@ class RSIStrategy(bt.Strategy):
             instrument_id = get_figi_for_ticker(INVEST_TOKEN, ticker)
             if instrument_id:
                 self.ticker_to_instrument_id[ticker] = instrument_id
-                print(f"Тикер {ticker} -> Instrument ID: {instrument_id}")
+                print(f"✅ Тикер {ticker} -> Instrument ID (FIGI): {instrument_id}")
             else:
-                print(f"Предупреждение: Не удалось получить instrument_id для {ticker}")
-                self.ticker_to_instrument_id[ticker] = ticker  # Используем тикер как запасной вариант
+                print(f"❌ Не удалось получить instrument_id для {ticker}. Заявки не будут выставляться.")
+                self.ticker_to_instrument_id[ticker] = None  # Явно указываем что instrument_id нет
         
         # Получаем начальный баланс с брокера
         self._update_broker_balance()
@@ -247,9 +253,10 @@ class RSIStrategy(bt.Strategy):
                     print(f" - free_money: {free_money}")
                     print(f" - account_id: {self.account_id}")
 
-                    # Получаем instrument_id (FIGI или UID) для тикера
-                    instrument_id = self.ticker_to_instrument_id.get(ticker, ticker)
-                    print(f" - instrument_id: {instrument_id}")
+                    # HARDCODE для отладки - FIGI для SNGS
+                    instrument_id = "BBG0047315D0"
+                    
+                    print(f" - instrument_id: {instrument_id} (HARDCODE)")
 
                     # Выставляем заявку на покупку по рынку
                     # Документация T-Invest API: https://opensource.tbank.ru/invest/invest-python
@@ -309,9 +316,11 @@ class RSIStrategy(bt.Strategy):
                             print("sell")
                             print(f"\t - Продаём по рынку {data._name}...")
 
-                            # Получаем instrument_id (FIGI или UID) для тикера
-                            instrument_id = self.ticker_to_instrument_id.get(ticker, ticker)
-                            print(f" - instrument_id: {instrument_id}")
+                            # Получаем instrument_id (FIGI) для тикера
+                            # HARDCODE для отладки - FIGI для SNGS
+                            instrument_id = "BBG0047315D0"
+                            
+                            print(f" - instrument_id: {instrument_id} (HARDCODE)")
 
                             # Выставляем заявку на продажу по рынку
                             # Документация T-Invest API: https://opensource.tbank.ru/invest/invest-python
