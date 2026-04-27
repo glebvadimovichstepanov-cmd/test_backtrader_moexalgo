@@ -207,6 +207,8 @@ class RSIStrategy(bt.Strategy):
                     print(f" - account_id: {self.account_id}")
 
                     # Выставляем заявку на покупку по рынку
+                    # Документация T-Invest API: https://opensource.tbank.ru/invest/invest-python
+                    # Для маркет-ордеров time_in_force не требуется
                     def post_buy_order(client):
                         return client.orders.post_order(
                             instrument_id=ticker,
@@ -215,10 +217,19 @@ class RSIStrategy(bt.Strategy):
                             account_id=self.account_id,
                             order_type=OrderType.ORDER_TYPE_MARKET,
                             order_id=str(uuid.uuid4()),
-                            time_in_force=TimeInForceType.TIME_IN_FORCE_DAY,
                         )
                     
-                    response = execute_with_client(post_buy_order)
+                    try:
+                        response = execute_with_client(post_buy_order)
+                    except Exception as e:
+                        error_msg = str(e)
+                        if "90001" in error_msg or "Need confirmation" in error_msg:
+                            print(f"⚠️ Ошибка 90001: Требуется подтверждение сделки!")
+                            print("   Откройте приложение Т-Инвестиций и подтвердите сессию/сделку.")
+                            print("   После подтверждения перезапустите скрипт.")
+                        else:
+                            print(f"Ошибка при выставлении заявки: {e}")
+                        continue
                     self.order_time = dt.datetime.now()
                     print(f"Выставили заявку на покупку 1 лота {ticker}:", response)
                     print("\t - order_id:", response.order_id)
@@ -236,6 +247,7 @@ class RSIStrategy(bt.Strategy):
                             print(f"\t - Продаём по рынку {data._name}...")
 
                             # Выставляем заявку на продажу по рынку
+                            # Документация T-Invest API: https://opensource.tbank.ru/invest/invest-python
                             def post_sell_order(client):
                                 return client.orders.post_order(
                                     instrument_id=ticker,
@@ -244,10 +256,19 @@ class RSIStrategy(bt.Strategy):
                                     account_id=self.account_id,
                                     order_type=OrderType.ORDER_TYPE_MARKET,
                                     order_id=str(uuid.uuid4()),
-                                    time_in_force=TimeInForceType.TIME_IN_FORCE_DAY,
                                 )
                             
-                            response = execute_with_client(post_sell_order)
+                            try:
+                                response = execute_with_client(post_sell_order)
+                            except Exception as e:
+                                error_msg = str(e)
+                                if "90001" in error_msg or "Need confirmation" in error_msg:
+                                    print(f"⚠️ Ошибка 90001: Требуется подтверждение сделки!")
+                                    print("   Откройте приложение Т-Инвестиций и подтвердите сессию/сделку.")
+                                    print("   После подтверждения перезапустите скрипт.")
+                                else:
+                                    print(f"Ошибка при выставлении заявки: {e}")
+                                continue
                             self.order_time = None
 
                             print(f"Выставили заявку на продажу 1 лота {ticker}:", response)
