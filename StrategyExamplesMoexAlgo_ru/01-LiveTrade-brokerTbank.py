@@ -76,11 +76,11 @@ def get_figi_for_ticker(token, ticker):
                 
                 print(f"Найден инструмент для {ticker}: FIGI={figi}")
                 
-                # Возвращаем только FIGI (требуется для post_order)
-                if figi:
+                # Возвращаем только FIGI в формате BBG... (требуется для post_order)
+                if figi and figi.startswith('BBG'):
                     return figi
                 else:
-                    print(f"Не удалось получить FIGI для {ticker}")
+                    print(f"Не удалось получить FIGI для {ticker} (получено: {figi})")
                     return None
             else:
                 print(f"Инструмент {ticker} не найден")
@@ -255,6 +255,12 @@ class RSIStrategy(bt.Strategy):
                     # Документация T-Invest API: https://opensource.tbank.ru/invest/invest-python
                     # Для маркет-ордеров time_in_force не требуется
                     def post_buy_order(client):
+                        print(f"\n[DEBUG] POST /orders/postOrder:")
+                        print(f"  instrument_id: {instrument_id}")
+                        print(f"  quantity: 1")
+                        print(f"  direction: ORDER_DIRECTION_BUY")
+                        print(f"  account_id: {self.account_id}")
+                        print(f"  order_type: ORDER_TYPE_MARKET")
                         return client.orders.post_order(
                             instrument_id=instrument_id,
                             quantity=1,
@@ -276,6 +282,14 @@ class RSIStrategy(bt.Strategy):
                             print(f"⚠️ Ошибка 50002: Инструмент не найден!")
                             print(f"   Тикер: {ticker}, instrument_id: {instrument_id}")
                             print("   Попробуйте использовать FIGI или UID инструмента вместо тикера.")
+                        elif "30052" in error_msg or "Instrument forbidden for trading by API" in error_msg:
+                            print(f"⚠️ Ошибка 30052: Инструмент запрещен для торговли через API!")
+                            print(f"   Тикер: {ticker}, instrument_id: {instrument_id}")
+                            print("   Возможные причины:")
+                            print("   - Ограничения брокера или ЦБ РФ для данного инструмента")
+                            print("   - Требуется расширенный статус квалифицированного инвестора")
+                            print("   - Проверьте настройки профиля в приложении Т-Инвестиций")
+                            print("   - Попробуйте другие инструменты (VTBR, GAZP, SBER)")
                         else:
                             print(f"Ошибка при выставлении заявки: {e}")
                         continue
@@ -302,6 +316,12 @@ class RSIStrategy(bt.Strategy):
                             # Выставляем заявку на продажу по рынку
                             # Документация T-Invest API: https://opensource.tbank.ru/invest/invest-python
                             def post_sell_order(client):
+                                print(f"\n[DEBUG] POST /orders/postOrder:")
+                                print(f"  instrument_id: {instrument_id}")
+                                print(f"  quantity: 1")
+                                print(f"  direction: ORDER_DIRECTION_SELL")
+                                print(f"  account_id: {self.account_id}")
+                                print(f"  order_type: ORDER_TYPE_MARKET")
                                 return client.orders.post_order(
                                     instrument_id=instrument_id,
                                     quantity=1,
@@ -323,6 +343,14 @@ class RSIStrategy(bt.Strategy):
                                     print(f"⚠️ Ошибка 50002: Инструмент не найден!")
                                     print(f"   Тикер: {ticker}, instrument_id: {instrument_id}")
                                     print("   Попробуйте использовать FIGI или UID инструмента вместо тикера.")
+                                elif "30052" in error_msg or "Instrument forbidden for trading by API" in error_msg:
+                                    print(f"⚠️ Ошибка 30052: Инструмент запрещен для торговли через API!")
+                                    print(f"   Тикер: {ticker}, instrument_id: {instrument_id}")
+                                    print("   Возможные причины:")
+                                    print("   - Ограничения брокера или ЦБ РФ для данного инструмента")
+                                    print("   - Требуется расширенный статус квалифицированного инвестора")
+                                    print("   - Проверьте настройки профиля в приложении Т-Инвестиций")
+                                    print("   - Попробуйте другие инструменты (VTBR, GAZP, SBER)")
                                 else:
                                     print(f"Ошибка при выставлении заявки: {e}")
                                 continue
