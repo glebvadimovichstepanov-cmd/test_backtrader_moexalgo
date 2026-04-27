@@ -3,19 +3,18 @@
 __pycache__/
 *.o
 *.obj
-*.out
-*.dll
 *.so
-*.a
-*.class
+*.dll
 *.exe
+*.class
+*.out
 
 # Dependencies
 .venv/
 venv/
 .env
 .env.local
-.env.*
+*.env.*
 
 # Logs and temp files
 *.log
@@ -31,19 +30,18 @@ venv/
 build/
 dist/
 target/
+.gradle/
 .mypy_cache/
 .pytest_cache/
 coverage/
 htmlcov/
-.nyc_output/
-.tox/
+*.coverage
 
 # System files
 .DS_Store
 Thumbs.db
-.git/
 
-# Compression files
+# Compressed files
 *.zip
 *.gz
 *.tar
@@ -66,6 +64,3 @@ Thumbs.db
 *.tar.bz2
 *.tar.xz
 *.tar.zst
-
-# Original rules preserved
-*.log
