@@ -46,9 +46,11 @@ def get_account_id(token):
                 return None
             for acc in accounts_response.accounts:
                 # Проверяем статус счета - ищем открытый счет
+                # AccountStatus.ACCOUNT_STATUS_OPEN = 2
+                from t_tech.invest import AccountStatus
                 status_value = acc.status.value if hasattr(acc.status, 'value') else str(acc.status)
-                print(f"Проверка счета {acc.id}, статус: {status_value}")
-                if status_value == 'ACCOUNT_STATUS_OPEN':
+                print(f"Проверка счета {acc.id}, статус: {status_value} ({acc.status})")
+                if acc.status == AccountStatus.ACCOUNT_STATUS_OPEN:
                     print(f"Найден активный счет: {acc.id}")
                     return acc.id
             print("Не найдено счетов со статусом ACCOUNT_STATUS_OPEN")
