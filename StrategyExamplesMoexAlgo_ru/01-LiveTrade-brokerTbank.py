@@ -14,7 +14,10 @@ from t_tech.invest import OrderDirection, OrderType, TimeInForceType
 # Токен берем из переменной окружения INVEST_TOKEN
 INVEST_TOKEN = os.getenv('INVEST_TOKEN')
 if not INVEST_TOKEN:
-    raise ValueError("Переменная окружения INVEST_TOKEN не установлена. Установите её перед запуском скрипта.")
+    raise ValueError("Переменная окружения INVEST_TOKEN не установлена. Установите её перед запуском скрипта.\n"
+                     "Пример установки:\n"
+                     "  Windows (PowerShell): $env:INVEST_TOKEN='ваш_токен'\n"
+                     "  Linux/Mac: export INVEST_TOKEN='ваш_токен'")
 
 # ID счета берем из переменной окружения INVEST_ACCOUNT_ID (опционально)
 INVEST_ACCOUNT_ID = os.getenv('INVEST_ACCOUNT_ID', None)
@@ -34,12 +37,25 @@ def get_tinkoff_client():
 
 def get_account_id(token):
     """Получить ID активного счета"""
-    with Client(token) as client:
-        accounts = client.users.get_accounts()
-        for acc in accounts.accounts:
-            if acc.status.value == 'ACCOUNT_STATUS_OPEN':
-                return acc.id
-    return None
+    try:
+        with Client(token) as client:
+            accounts_response = client.users.get_accounts()
+            print(f"Получены счета: {accounts_response}")
+            if not hasattr(accounts_response, 'accounts') or not accounts_response.accounts:
+                print("Внимание: список счетов пуст или имеет неверный формат")
+                return None
+            for acc in accounts_response.accounts:
+                # Проверяем статус счета - ищем открытый счет
+                status_value = acc.status.value if hasattr(acc.status, 'value') else str(acc.status)
+                print(f"Проверка счета {acc.id}, статус: {status_value}")
+                if status_value == 'ACCOUNT_STATUS_OPEN':
+                    print(f"Найден активный счет: {acc.id}")
+                    return acc.id
+            print("Не найдено счетов со статусом ACCOUNT_STATUS_OPEN")
+            return None
+    except Exception as e:
+        print(f"Ошибка при получении списка счетов: {e}")
+        return None
 
 
 # Торговая система
