@@ -5,49 +5,32 @@ __pycache__/
 *.pyo
 *.pyd
 
-# Logs and temp files
-*.log
-*.tmp
-
-# Environment
-.env
-.env.local
-*.env.*
-
-# Editors
-.vscode/
-.idea/
+# Build artifacts
+build/
+dist/
 
 # Dependencies
 .venv/
 venv/
-node_modules/
+.env
+.env.local
+*.env.*
 
-# Build artifacts
-dist/
-build/
-target/
+# Logs
+*.log
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
 
 # Coverage
 .coverage
 coverage/
 htmlcov/
 
-# MyPy
-.mypy_cache/
-
-# PyTest
+# Testing
 .pytest_cache/
-
-# Gradle
-.gradle/
-
-# Compiled files
-*.o
-*.obj
-*.out
-*.exe
-*.dll
-*.so
-*.a
+.mypy_cache/
 ```

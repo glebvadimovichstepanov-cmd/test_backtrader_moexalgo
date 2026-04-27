@@ -169,6 +169,18 @@ class MoexAlgoData(DataBase):
             else:
                 self.p.supercandles[self.symbol][self.metric].insert(0, None)
 
+        elif type(kline).__name__ == 'Timestamp' or (isinstance(kline, (list, tuple)) and len(kline) >= 6 and isinstance(kline[0], (str, pd.Timestamp))):
+            # Обработка данных из get_candles() после переключения с super_candles=False
+            # Формат: [Timestamp или строка, open, high, low, close, volume]
+            timestamp, open_, high, low, close, volume = kline[0], kline[1], kline[2], kline[3], kline[4], kline[5]
+            self.lines.datetime[0] = date2num(timestamp) if isinstance(timestamp, datetime) else date2num(pd.Timestamp(timestamp).to_pydatetime())
+            self.lines.open[0] = open_
+            self.lines.high[0] = high
+            self.lines.low[0] = low
+            self.lines.close[0] = close
+            self.lines.volume[0] = volume
+            self.p.supercandles[self.symbol][self.metric].insert(0, None)
+
         return True
 
     def _start_live(self):
