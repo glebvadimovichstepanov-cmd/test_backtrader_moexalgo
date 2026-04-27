@@ -1,45 +1,63 @@
 ```
-# Python cache
+# Data cache
+StrategyExamplesMoexAlgo_ru/data_cache/
+
+# Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+.Python
+*.so
 
-# Data cache
-StrategyExamplesMoexAlgo_ru/data_cache/
+# Dependencies
+.venv/
+venv/
+env/
+ENV/
 
 # Logs
 *.log
 
-# Environment files
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment variables
 .env
 .env.local
 *.env.*
 
-# IDE files
-.vscode/
-.idea/
-
-# Temporary files
-*.tmp
-*.swp
-
 # Coverage reports
 coverage/
 htmlcov/
-.coverage
 
-# Build directories
-build/
-dist/
-*.egg-info/
-
-# Virtual environments
-venv/
-.venv/
-
-# Dependencies cache
-.pip-tools/
-.mypy_cache/
+# Testing
 .pytest_cache/
+.mypy_cache/
+.hypothesis/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Temporary files
+*.tmp
+*~
 ```
