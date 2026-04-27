@@ -63,25 +63,28 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
     
     # Пытаемся загрузить из кэша
     data = None
+    data_points = None
     if use_cache and not force_update:
-        data = load_from_cache(cache_key)
-    
-    # Если данные загружены из кэша и они пустые - возвращаем результат
-    if data is not None and isinstance(data, list) and len(data) == 0:
-        print(f"⚠ Нет данных в кэше для {symbol} за {date_start.date()}")
-        return {
-            'date': date_start.date(),
-            'start_cash': 100000.0,
-            'end_cash': 100000.0,
-            'pnl': 0.0,
-            'pnl_percent': 0.0,
-            'trades_count': 0,
-            'strategy': None,
-            'error': 'no_data'
-        }
+        loaded_data = load_from_cache(cache_key)
+        if loaded_data is not None:
+            # Если данные загружены из кэша и они пустые - возвращаем результат
+            if isinstance(loaded_data, list) and len(loaded_data) == 0:
+                print(f"⚠ Нет данных в кэше для {symbol} за {date_start.date()}")
+                return {
+                    'date': date_start.date(),
+                    'start_cash': 100000.0,
+                    'end_cash': 100000.0,
+                    'pnl': 0.0,
+                    'pnl_percent': 0.0,
+                    'trades_count': 0,
+                    'strategy': None,
+                    'error': 'no_data'
+                }
+            # Данные успешно загружены из кэша
+            data_points = loaded_data
     
     # Если нет в кэше или требуется обновление - загружаем через moexalgo
-    if data is None:
+    if data_points is None:
         print(f"📡 Загрузка данных для {symbol} ({date_start.date()} - {date_end.date()})...")
         store = MoexAlgoStore()
         
@@ -167,9 +170,6 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
                 # Сохраняем в кэш
                 if use_cache:
                     save_to_cache(cache_key, data_points)
-                    # Пересоздаем объект data из кэшированных данных
-                    data = bt.feeds.PandasData(dataname=__import__('pandas').DataFrame(data_points))
-                    data._dataname = symbol
                 
                 break  # Выход из цикла while после успешной загрузки
                 
@@ -184,6 +184,11 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
                 else:
                     # Другая ошибка - пробрасываем дальше
                     raise
+    
+    # Создаем объект data из data_points (из кэша или загруженных)
+    import pandas as pd
+    data = bt.feeds.PandasData(dataname=pd.DataFrame(data_points))
+    data._dataname = symbol
     
     cerebro.adddata(data)
     
