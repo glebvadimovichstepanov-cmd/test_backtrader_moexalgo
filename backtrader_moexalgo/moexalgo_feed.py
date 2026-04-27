@@ -54,14 +54,16 @@ class MoexAlgoData(DataBase):
 
         if hasattr(self.p, 'timeframe'): self.timeframe = self.p.timeframe
         if hasattr(self.p, 'compression'): self.compression = self.p.compression
-        if hasattr(self.p, 'fromdate'): self.from_date = datetime.combine(self.p.fromdate, time.min)
-        if hasattr(self.p, 'todate'): self.to_date = datetime.combine(self.p.todate, time.min)
+        if hasattr(self.p, 'fromdate') and self.p.fromdate is not None:
+            self.from_date = datetime.combine(self.p.fromdate, time.min)
+        if hasattr(self.p, 'todate') and self.p.todate is not None:
+            self.to_date = datetime.combine(self.p.todate, time.min)
 
         if 'live_bars' in kwargs: self.live_bars = kwargs['live_bars']
         if 'skip_first_date' in kwargs: self.skip_first_date = kwargs['skip_first_date']
         if 'skip_last_date' in kwargs: self.skip_last_date = kwargs['skip_last_date']
         if 'four_price_doji' in kwargs: self.four_price_doji = kwargs['four_price_doji']
-        if 'todate' in kwargs: self.to_date = kwargs['todate']
+        if 'todate' in kwargs and kwargs['todate'] is not None: self.to_date = kwargs['todate']
 
         if 'super_candles' in kwargs: self.super_candles = kwargs['super_candles']
         if 'metric' in kwargs:
