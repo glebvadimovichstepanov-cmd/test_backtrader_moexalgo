@@ -155,7 +155,7 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
         use_super_candles_mode = False
         super_candles_available = False
     else:
-        # Первый запрос - всегда без кэша, пытаемся получить super_candles (если статус неизвестен)
+        # Первый запрос - пытаемся получить super_candles с metric='tradestats'
         getdata_kwargs = {
             'dataname': symbol,
             'fromdate': date_start,
@@ -163,7 +163,6 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
             'timeframe': timeframe,
             'compression': compression,
             'live_bars': False,
-            'super_candles': True,
             'metric': 'tradestats'
         }
         
@@ -229,14 +228,12 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
                 
         except Exception as e:
             error_msg = str(e)
-            if '403' in error_msg or 'Forbidden' in error_msg or 'tradestats' in error_msg.lower() or 'limit' in error_msg.lower():
-                print(f"⚠ Ошибка доступа к super_candles: {e} - переключаемся на DF режим")
-                super_candles_available = False
-                use_super_candles_mode = False
-                data_points = None
-                _super_candles_availability_cache[symbol] = False
-            else:
-                raise
+            # Любая ошибка при запросе super_candles означает, что они недоступны
+            print(f"⚠ Ошибка доступа к super_candles: {e} - переключаемся на DF режим")
+            super_candles_available = False
+            use_super_candles_mode = False
+            data_points = None
+            _super_candles_availability_cache[symbol] = False
     
     # ============================================================
     # ШАГ 2: Определяем режим работы и обрабатываем данные
@@ -258,19 +255,17 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
         # Если кэш не найден или не используется - запрашиваем MOEX без super_candles
         if not cached_data_found:
             store = MoexAlgoStore()
-            
-            getdata_kwargs = {
-                'dataname': symbol,
-                'fromdate': date_start,
-                'todate': date_end,
-                'timeframe': timeframe,
-                'compression': compression,
-                'live_bars': False
-            }
+            data = store.getdata(
+                dataname=symbol,
+                fromdate=date_start,
+                todate=date_end,
+                timeframe=bt.TimeFrame.Minutes,
+                compression=5,
+                metric='tradestats',  # Используем расширенные данные для интрадея
+                live_bars=False
+            )
             
             try:
-                data = store.getdata(**getdata_kwargs)
-                
                 # ВАЖНО: Для корректной работы нужно вызвать start() для загрузки данных
                 data.start()
                 
