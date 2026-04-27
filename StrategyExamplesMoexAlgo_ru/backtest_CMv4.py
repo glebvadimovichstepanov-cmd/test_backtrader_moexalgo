@@ -47,7 +47,7 @@ def save_to_cache(cache_key, data):
         print(f"⚠ Ошибка сохранения в кэш: {e}")
 
 
-def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, force_update=False):
+def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, force_update=False, try_super_candles=True):
     """Запуск бэктеста для одного дня"""
     cerebro = bt.Cerebro()
     
@@ -57,7 +57,7 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
     # Параметры для кэширования
     timeframe = bt.TimeFrame.Minutes
     compression = 10
-    metric = None  # Отключаем tradestats по умолчанию (требует платной подписки)
+    metric = 'tradestats' if try_super_candles else None  # Пытаемся использовать tradestats
     
     cache_key = get_cache_key(symbol, date_start, date_end, timeframe, compression, metric)
     
@@ -66,66 +66,124 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
     if use_cache and not force_update:
         data = load_from_cache(cache_key)
     
+    # Если данные загружены из кэша и они пустые - возвращаем результат
+    if data is not None and isinstance(data, list) and len(data) == 0:
+        print(f"⚠ Нет данных в кэше для {symbol} за {date_start.date()}")
+        return {
+            'date': date_start.date(),
+            'start_cash': 100000.0,
+            'end_cash': 100000.0,
+            'pnl': 0.0,
+            'pnl_percent': 0.0,
+            'trades_count': 0,
+            'strategy': None,
+            'error': 'no_data'
+        }
+    
     # Если нет в кэше или требуется обновление - загружаем через moexalgo
     if data is None:
         print(f"📡 Загрузка данных для {symbol} ({date_start.date()} - {date_end.date()})...")
         store = MoexAlgoStore()
-        # Параметры для запроса
-        getdata_kwargs = {
-            'dataname': symbol,
-            'fromdate': date_start,
-            'todate': date_end,
-            'timeframe': timeframe,
-            'compression': compression,
-            'live_bars': False
-        }
         
-        # Добавляем super_candles и metric только если metric не None
-        if metric is not None:
-            getdata_kwargs['super_candles'] = True
-            getdata_kwargs['metric'] = metric
+        # Сначала пытаемся загрузить с super_candles (если try_super_candles=True)
+        use_super_candles = try_super_candles
         
-        data = store.getdata(**getdata_kwargs)
-        
-        # Сохраняем в кэш
-        if use_cache:
-            # Для кэширования нужно собрать данные в список
-            # т.к. backtrader данные ленивые
-            # Также собираем данные tradestats из p.supercandles
-            data_points = []
+        while True:
+            # Параметры для запроса
+            getdata_kwargs = {
+                'dataname': symbol,
+                'fromdate': date_start,
+                'todate': date_end,
+                'timeframe': timeframe,
+                'compression': compression,
+                'live_bars': False
+            }
             
-            # Проходим по данным для их загрузки и заполнения supercandles
-            for d in data:
-                point = {
-                    'datetime': d.datetime[0],
-                    'open': d.open[0],
-                    'high': d.high[0],
-                    'low': d.low[0],
-                    'close': d.close[0],
-                    'volume': d.volume[0]
-                }
-                data_points.append(point)
+            # Добавляем super_candles и metric только если используем их
+            if use_super_candles:
+                getdata_kwargs['super_candles'] = True
+                getdata_kwargs['metric'] = 'tradestats'
             
-            # После итерации данные supercandles должны быть заполнены
-            # Они хранятся в обратном порядке (последние добавляются в начало)
-            # Добавляем поля tradestats только если metric был указан
-            if metric is not None and hasattr(data, 'p') and hasattr(data.p, 'supercandles') and symbol in data.p.supercandles:
-                sc_list = data.p.supercandles[symbol].get(metric, [])
-                # Переворачиваем список, чтобы привести к правильному порядку
-                sc_list_reversed = list(reversed(sc_list))
+            try:
+                data = store.getdata(**getdata_kwargs)
                 
-                # Добавляем поля tradestats к соответствующим точкам данных
-                for i, point in enumerate(data_points):
-                    if i < len(sc_list_reversed):
-                        sc_data = sc_list_reversed[i]
-                        if sc_data:
-                            for key, value in sc_data.items():
-                                point[f'tradestats_{key}'] = value
-            
-            save_to_cache(cache_key, data_points)
-            # Пересоздаем объект data из кэшированных данных
-            data = bt.feeds.PandasData(dataname=__import__('pandas').DataFrame(data_points))
-            data._dataname = symbol
+                # Проверяем, есть ли данные (итерируем для загрузки)
+                data_points = []
+                has_data = False
+                
+                for d in data:
+                    # Проверка на наличие данных (защита от пустых баров)
+                    if len(d.open) == 0 or len(d.high) == 0 or len(d.low) == 0 or len(d.close) == 0:
+                        continue
+                    has_data = True
+                    point = {
+                        'datetime': d.datetime[0],
+                        'open': d.open[0],
+                        'high': d.high[0],
+                        'low': d.low[0],
+                        'close': d.close[0],
+                        'volume': d.volume[0]
+                    }
+                    data_points.append(point)
+                
+                # Если данных нет вообще - сохраняем пустой кэш и выходим
+                if not has_data:
+                    print(f"⚠ Нет данных для {symbol} за {date_start.date()}")
+                    if use_cache:
+                        save_to_cache(cache_key, [])
+                    return {
+                        'date': date_start.date(),
+                        'start_cash': 100000.0,
+                        'end_cash': 100000.0,
+                        'pnl': 0.0,
+                        'pnl_percent': 0.0,
+                        'trades_count': 0,
+                        'strategy': None,
+                        'error': 'no_data'
+                    }
+                
+                # Если использовали super_candles, пробуем добавить tradestats
+                if use_super_candles:
+                    if hasattr(data, 'p') and hasattr(data.p, 'supercandles') and symbol in data.p.supercandles:
+                        sc_list = data.p.supercandles[symbol].get('tradestats', [])
+                        # Переворачиваем список, чтобы привести к правильному порядку
+                        sc_list_reversed = list(reversed(sc_list))
+                        
+                        # Добавляем поля tradestats к соответствующим точкам данных
+                        for i, point in enumerate(data_points):
+                            if i < len(sc_list_reversed):
+                                sc_data = sc_list_reversed[i]
+                                if sc_data:
+                                    for key, value in sc_data.items():
+                                        point[f'tradestats_{key}'] = value
+                        print("✓ Расширенные данные (tradestats) успешно загружены")
+                    else:
+                        # Super candles не доступны (нет подписки), пробуем без них
+                        print("⚠ Расширенные данные (tradestats) недоступны. Требуется платная подписка MOEX AlgoPack.")
+                        print("  Продолжение работы с обычными свечами...")
+                        use_super_candles = False
+                        continue  # Повторяем запрос без super_candles
+                
+                # Сохраняем в кэш
+                if use_cache:
+                    save_to_cache(cache_key, data_points)
+                    # Пересоздаем объект data из кэшированных данных
+                    data = bt.feeds.PandasData(dataname=__import__('pandas').DataFrame(data_points))
+                    data._dataname = symbol
+                
+                break  # Выход из цикла while после успешной загрузки
+                
+            except Exception as e:
+                error_msg = str(e)
+                if use_super_candles and ('403' in error_msg or 'Forbidden' in error_msg or 'tradestats' in error_msg.lower()):
+                    # Ошибка доступа к tradestats - пробуем без них
+                    print(f"⚠ Ошибка доступа к расширенным данным: {e}")
+                    print("  Продолжение работы с обычными свечами...")
+                    use_super_candles = False
+                    continue  # Повторяем запрос без super_candles
+                else:
+                    # Другая ошибка - пробрасываем дальше
+                    raise
     
     cerebro.adddata(data)
     
@@ -136,7 +194,7 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
     
     # Запуск
     results = cerebro.run()
-    strat = results[0]
+    strat = results[0] if results else None
     
     # Получаем статистику
     final_cash = cerebro.broker.getvalue()
@@ -144,10 +202,12 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
     pnl_percent = (pnl / 100000.0) * 100
     
     # Считаем количество сделок через analyzer или trades observer
-    trades_count = len([t for t in strat._trades]) if hasattr(strat, '_trades') else 0
-    if trades_count == 0:
-        # Альтернативный способ - через observers
-        trades_count = len(cerebro.observer.trades) if hasattr(cerebro, 'observer') and hasattr(cerebro.observer, 'trades') else 0
+    trades_count = 0
+    if strat:
+        trades_count = len([t for t in strat._trades]) if hasattr(strat, '_trades') else 0
+        if trades_count == 0:
+            # Альтернативный способ - через observers
+            trades_count = len(cerebro.observer.trades) if hasattr(cerebro, 'observer') and hasattr(cerebro.observer, 'trades') else 0
     
     return {
         'date': date_start.date(),
@@ -192,6 +252,11 @@ def main():
                 day_end = current_date.replace(hour=23, minute=59, second=59, microsecond=0)
                 
                 result = run_daily_backtest(day_start, day_end)
+                
+                # Пропускаем дни без данных (не добавляем в статистику)
+                if result.get('error') == 'no_data':
+                    continue
+                
                 daily_results.append(result)
                 
                 total_pnl += result['pnl']
