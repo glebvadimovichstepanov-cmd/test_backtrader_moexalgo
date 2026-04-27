@@ -3,12 +3,11 @@
 __pycache__/
 *.o
 *.obj
-*.out
-*.class
-*.dll
 *.so
-*.a
+*.dll
 *.exe
+*.class
+*.out
 
 # Dependencies
 .venv/
@@ -27,41 +26,18 @@ venv/
 .vscode/
 .idea/
 
+# Coverage reports
+.coverage
+coverage/
+htmlcov/
+
 # Build directories
 build/
 dist/
 target/
-.gradle/
 .mypy_cache/
 .pytest_cache/
-coverage/
-htmlcov/
-.coverage
 
 # System files
 .DS_Store
 Thumbs.db
-
-# Compressed files
-*.zip
-*.gz
-*.tar
-*.tgz
-*.bz2
-*.xz
-*.7z
-*.rar
-*.zst
-*.lz4
-*.lzh
-*.cab
-*.arj
-*.rpm
-*.deb
-*.Z
-*.lz
-*.lzo
-*.tar.gz
-*.tar.bz2
-*.tar.xz
-*.tar.zst
