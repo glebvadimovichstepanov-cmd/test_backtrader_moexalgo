@@ -25,15 +25,15 @@ INVEST_ACCOUNT_ID = os.getenv('INVEST_ACCOUNT_ID', None)
 from Config import Config as ConfigMOEX  # для авторизации на Московской Бирже
 
 
-# Глобальный клиент для работы с Tinkoff API
-_tinkoff_client = None
+# Глобальный токен для работы с Tinkoff API
+_tinkoff_token = None
 
-def get_tinkoff_client():
-    """Получить единый инстанс клиента Tinkoff API"""
-    global _tinkoff_client
-    if _tinkoff_client is None:
-        _tinkoff_client = Client(INVEST_TOKEN)
-    return _tinkoff_client
+def get_tinkoff_token():
+    """Получить токен Tinkoff API"""
+    global _tinkoff_token
+    if _tinkoff_token is None:
+        _tinkoff_token = INVEST_TOKEN
+    return _tinkoff_token
 
 def get_account_id(token):
     """Получить ID активного счета"""
@@ -58,6 +58,13 @@ def get_account_id(token):
     except Exception as e:
         print(f"Ошибка при получении списка счетов: {e}")
         return None
+
+
+def execute_with_client(func):
+    """Хелпер для выполнения операций с клиентом в контекстном менеджере"""
+    token = get_tinkoff_token()
+    with Client(token) as client:
+        return func(client)
 
 
 # Торговая система
@@ -100,9 +107,6 @@ class RSIStrategy(bt.Strategy):
             self.buy_once[d._name] = False
             self.sell_once[d._name] = False
         
-        # Инициализируем клиент при старте стратегии
-        self.client = get_tinkoff_client()
-        
         # Получаем account_id если он не задан
         if not self.account_id:
             self.account_id = get_account_id(INVEST_TOKEN)
@@ -115,7 +119,10 @@ class RSIStrategy(bt.Strategy):
     def _update_broker_balance(self):
         """Получить актуальный баланс свободного капитала от брокера"""
         try:
-            portfolio_response = self.client.operations.get_portfolio(account_id=self.account_id)
+            def get_portfolio(client):
+                return client.operations.get_portfolio(account_id=self.account_id)
+            
+            portfolio_response = execute_with_client(get_portfolio)
             if hasattr(portfolio_response, 'total_amount_bonds'):
                 # Для нового API t_tech.invest
                 total_value = float(portfolio_response.total_amount_bonds.units + portfolio_response.total_amount_bonds.nano / 1e9) if hasattr(portfolio_response.total_amount_bonds, 'nano') else float(portfolio_response.total_amount_bonds.units)
@@ -202,15 +209,18 @@ class RSIStrategy(bt.Strategy):
                     print(f" - account_id: {self.account_id}")
 
                     # Выставляем заявку на покупку по рынку
-                    response = self.client.orders.post_order(
-                        instrument_id=ticker,
-                        quantity=1,
-                        direction=OrderDirection.ORDER_DIRECTION_BUY,
-                        account_id=self.account_id,
-                        order_type=OrderType.ORDER_TYPE_MARKET,
-                        order_id=str(uuid.uuid4()),
-                        time_in_force=TimeInForceType.TIME_IN_FORCE_DAY,
-                    )
+                    def post_buy_order(client):
+                        return client.orders.post_order(
+                            instrument_id=ticker,
+                            quantity=1,
+                            direction=OrderDirection.ORDER_DIRECTION_BUY,
+                            account_id=self.account_id,
+                            order_type=OrderType.ORDER_TYPE_MARKET,
+                            order_id=str(uuid.uuid4()),
+                            time_in_force=TimeInForceType.TIME_IN_FORCE_DAY,
+                        )
+                    
+                    response = execute_with_client(post_buy_order)
                     self.order_time = dt.datetime.now()
                     print(f"Выставили заявку на покупку 1 лота {ticker}:", response)
                     print("\t - order_id:", response.order_id)
@@ -228,15 +238,18 @@ class RSIStrategy(bt.Strategy):
                             print(f"\t - Продаём по рынку {data._name}...")
 
                             # Выставляем заявку на продажу по рынку
-                            response = self.client.orders.post_order(
-                                instrument_id=ticker,
-                                quantity=1,
-                                direction=OrderDirection.ORDER_DIRECTION_SELL,
-                                account_id=self.account_id,
-                                order_type=OrderType.ORDER_TYPE_MARKET,
-                                order_id=str(uuid.uuid4()),
-                                time_in_force=TimeInForceType.TIME_IN_FORCE_DAY,
-                            )
+                            def post_sell_order(client):
+                                return client.orders.post_order(
+                                    instrument_id=ticker,
+                                    quantity=1,
+                                    direction=OrderDirection.ORDER_DIRECTION_SELL,
+                                    account_id=self.account_id,
+                                    order_type=OrderType.ORDER_TYPE_MARKET,
+                                    order_id=str(uuid.uuid4()),
+                                    time_in_force=TimeInForceType.TIME_IN_FORCE_DAY,
+                                )
+                            
+                            response = execute_with_client(post_sell_order)
                             self.order_time = None
 
                             print(f"Выставили заявку на продажу 1 лота {ticker}:", response)
@@ -303,8 +316,8 @@ if __name__ == '__main__':
     # Получаем account_id из переменной окружения или используем None (будет выбран первый доступный)
     account_id = INVEST_ACCOUNT_ID
     
-    # Инициализируем глобальный клиент и получаем account_id при старте
-    _ = get_tinkoff_client()  # Инициализация клиента
+    # Инициализируем глобальный токен и получаем account_id при старте
+    _ = get_tinkoff_token()  # Инициализация токена
     if not account_id:
         account_id = get_account_id(INVEST_TOKEN)
         if not account_id:
