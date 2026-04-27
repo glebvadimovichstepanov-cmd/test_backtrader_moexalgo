@@ -78,10 +78,14 @@ def load_from_cache(cache_key):
         try:
             with open(cache_file, 'rb') as f:
                 data = pickle.load(f)
-            # Проверяем, не пустой ли это кэш (выходной/праздничный день)
+            # Проверяем, не пустой ли это список (выходной/праздничный день)
             if isinstance(data, list) and len(data) == 0:
-                print(f"⚠ Выходной/праздничный день (пустой кэш) для ключа {cache_key[:8]}...")
+                print(f"⚠ Пустой список в кэше для ключа {cache_key[:8]}...")
                 return {'empty': True}
+            # Проверяем, не маркер ли это пустого кэша (устаревший формат)
+            if isinstance(data, dict) and data.get('empty'):
+                print(f"⚠ Маркер пустого кэша для ключа {cache_key[:8]} (игнорируем)...")
+                return None  # Возвращаем None, чтобы сделать перезапрос MOEX
             print(f"✓ Данные загружены из кэша: {cache_file}")
             return data
         except Exception as e:
@@ -220,17 +224,11 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
         if use_cache and not force_update:
             loaded_data = load_from_cache(cache_key)
             if loaded_data is not None:
-                if isinstance(loaded_data, dict) and loaded_data.get('empty'):
-                    print(f"⚠ Выходной/праздничный день (пустой кэш DF) для {symbol} за {date_start.date()} - пробуем перезапрос MOEX...")
-                    # Помечаем, что нужно сделать запрос к MOEX (не используем кэш)
-                    cached_data_found = False
-                    data_points = None  # Сбрасываем, чтобы выполнить запрос к MOEX ниже
-                else:
-                    data_points = loaded_data
-                    cached_data_found = True
-                    print(f"✓ Данные загружены из кэша (DF режим): {cache_key}")
+                data_points = loaded_data
+                cached_data_found = True
+                print(f"✓ Данные загружены из кэша (DF режим): {cache_key}")
         
-        # Если кэш не найден, не используется или был помечен как empty - запрашиваем MOEX без super_candles
+        # Если кэш не найден или не используется - запрашиваем MOEX без super_candles
         if not cached_data_found:
             print(f"📡 Проверка доступности DF для {symbol} ({date_start.date()})...")
             store = MoexAlgoStore()
@@ -269,8 +267,7 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
                 
                 if not has_data:
                     print(f"⚠ Нет данных для {symbol} за {date_start.date()}")
-                    if use_cache:
-                        save_to_cache(cache_key, {'empty': True})
+                    # НЕ сохраняем пустые данные в кэш - всегда будем делать перезапрос MOEX
                     return {
                         'date': date_start.date(),
                         'start_cash': 100000.0,
@@ -283,14 +280,14 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
                         'skip_day': True
                     }
                 
-                if use_cache:
+                # Сохраняем в кэш только если данные не пустые
+                if use_cache and data_points and len(data_points) > 0:
                     save_to_cache(cache_key, data_points)
                     print(f"✓ Данные сохранены в кэш (DF режим): {cache_key}")
                     
             except Exception as e2:
                 print(f"⚠ Ошибка при загрузке DF данных: {e2}")
-                if use_cache:
-                    save_to_cache(cache_key, {'empty': True})
+                # НЕ сохраняем пустые данные в кэш при ошибке - всегда будем делать перезапрос MOEX
                 return {
                     'date': date_start.date(),
                     'start_cash': 100000.0,

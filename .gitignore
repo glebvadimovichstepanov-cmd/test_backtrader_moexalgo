@@ -1,31 +1,4 @@
 ```
-# Python cache
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
 # Data cache
 StrategyExamplesMoexAlgo_ru/data_cache/
-
-# Logs
-*.log
-
-# Environment
-.env
-.env.local
-*.env.*
-
-# Dependencies
-venv/
-.venv/
-node_modules/
-
-# Editors
-.vscode/
-.idea/
-
-# OS
-.DS_Store
-Thumbs.db
 ```
