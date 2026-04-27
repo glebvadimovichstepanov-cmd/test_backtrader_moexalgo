@@ -193,10 +193,21 @@ class MoexAlgoData(DataBase):
                                                                   skip_last_date=self.skip_last_date,
                                                                   four_price_doji=self.four_price_doji)
                 else:  # если нужны Super свечи
-                    klines, get_live_bars_from = self.get_super_candles(from_date=self.get_live_bars_from,
+                    klines, get_live_bars_from, super_candles_available = self.get_super_candles(from_date=self.get_live_bars_from,
                                                                         symbol=self.symbol,
                                                                         interval=self.interval,
                                                                         metric=self.metric)
+                    if not super_candles_available:
+                        # Если SuperCandles недоступны, переключаемся на обычные свечи DF
+                        print(f"{self.symbol} - SuperCandles недоступны, используем обычные данные DF")
+                        self.super_candles = False
+                        klines, get_live_bars_from = self.get_candles(from_date=self.get_live_bars_from,
+                                                                      symbol=self.symbol,
+                                                                      interval=self.interval,
+                                                                      to_date=self.to_date,
+                                                                      skip_first_date=self.skip_first_date,
+                                                                      skip_last_date=self.skip_last_date,
+                                                                      four_price_doji=self.four_price_doji)
 
                 if not klines.empty:  # если есть, что обрабатывать
                     new_klines = klines.values.tolist()  # берем новые строки данных
@@ -255,10 +266,21 @@ class MoexAlgoData(DataBase):
                                                               skip_last_date=self.skip_last_date,
                                                               four_price_doji=self.four_price_doji)  # , is_test=True
             else:  # если нужны Super свечи
-                klines, get_live_bars_from = self.get_super_candles(from_date=self.from_date,
+                klines, get_live_bars_from, super_candles_available = self.get_super_candles(from_date=self.from_date,
                                                                     symbol=self.symbol,
                                                                     interval=self.interval,
                                                                     metric=self.metric)  # , is_test=True
+                if not super_candles_available:
+                    # Если SuperCandles недоступны, переключаемся на обычные свечи DF
+                    print(f"{self.symbol} - SuperCandles недоступны, используем обычные данные DF")
+                    self.super_candles = False
+                    klines, get_live_bars_from = self.get_candles(from_date=self.from_date,
+                                                                  symbol=self.symbol,
+                                                                  interval=self.interval,
+                                                                  to_date=self.to_date,
+                                                                  skip_first_date=self.skip_first_date,
+                                                                  skip_last_date=self.skip_last_date,
+                                                                  four_price_doji=self.four_price_doji)
             self.get_live_bars_from = get_live_bars_from
 
             klines = klines.values.tolist()
@@ -386,6 +408,14 @@ class MoexAlgoData(DataBase):
         get_live_bars_from = None
         till_date = datetime.now().date()  # Получать данные будем до текущей даты
         ticker = Ticker(symbol)  # Пока реализуем только для тикеров ММВБ
+        
+        # Проверяем доступность SuperCandles только один раз
+        super_candles_available = self._check_super_candles_availability(ticker, metric)
+        if not super_candles_available:
+            # Если SuperCandles недоступны, возвращаем пустой DataFrame и флаг
+            print(f"{symbol} - SuperCandles ({metric}) недоступны. Используем обычные данные DF.")
+            return pd.DataFrame(), None, False
+        
         while True:  # Будем получать данные пока не получим все
             if metric == 'tradestats':  # Сделки
                 iterator = ticker.tradestats(start=last_date, end=till_date)
@@ -462,6 +492,31 @@ class MoexAlgoData(DataBase):
         if is_test:
             df.drop(df.tail(4).index, inplace=True)  # drop last n rows
             get_live_bars_from = df.iloc[-1]['datetime']
-            return df, get_live_bars_from
+            return df, get_live_bars_from, True
 
-        return df, get_live_bars_from
+        return df, get_live_bars_from, True
+
+
+    def _check_super_candles_availability(self, ticker, metric):
+        """Проверка доступности SuperCandles для тикера
+            :param Ticker ticker: Объект тикера
+            :param str metric: Метрика. 'tradestats' - сделки, 'orderstats' - заявки, 'obstats' - стакан
+            :return: True если SuperCandles доступны, False иначе
+        """
+        try:
+            # Пробуем получить одну запись для проверки доступности
+            if metric == 'tradestats':
+                iterator = ticker.tradestats(limit=1)
+            elif metric == 'orderstats':
+                iterator = ticker.orderstats(limit=1)
+            elif metric == 'obstats':
+                iterator = ticker.obstats(limit=1)
+            else:
+                return False
+            
+            # Пытаемся получить первую запись
+            next(iterator)
+            return True
+        except Exception as e:
+            print(f"{self.symbol} - Ошибка при проверке SuperCandles ({metric}): {e}")
+            return False

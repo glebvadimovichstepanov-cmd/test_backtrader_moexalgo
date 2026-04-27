@@ -1,4 +1,39 @@
 ```
-# Data cache
-StrategyExamplesMoexAlgo_ru/data_cache/
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Dependencies
+.venv/
+venv/
+env/
+requirements.txt.bak
+
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+*.env.*
+
+# Coverage
+.coverage
+coverage/
+htmlcov/
+
+# Editors
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS
+.DS_Store
+Thumbs.db
 ```
