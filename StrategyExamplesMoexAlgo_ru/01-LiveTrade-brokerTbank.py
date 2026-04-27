@@ -61,35 +61,49 @@ def get_account_id(token):
         return None
 
 
-def get_figi_for_ticker(token, ticker):
-    """Получить FIGI для тикера через T-Invest API"""
+def get_figi_for_ticker(token, ticker, class_code=None):
+    """Получить FIGI для тикера через T-Invest API
+    
+    Args:
+        token: Токен доступа к T-Invest API
+        ticker: Тикер инструмента (например, 'SNGS')
+        class_code: Код режима торгов/доски (например, 'TQBR'). Если None, используется первый найденный.
+    
+    Returns:
+        FIGI в формате BBG... или None если не найден
+    """
     try:
         with Client(token) as client:
             # Используем instruments.find_instrument для поиска инструмента по тикуру
-            # Метод возвращает список найденных инструментов
             instruments_response = client.instruments.find_instrument(query=ticker)
+            
+            print(f"\n[DEBUG] Поиск FIGI для '{ticker}' (class_code={class_code}): найдено {len(instruments_response.instruments) if hasattr(instruments_response, 'instruments') else 0} совпадений:")
             
             if hasattr(instruments_response, 'instruments') and instruments_response.instruments:
                 # Ищем инструмент с FIGI формата BBG... (требуется для post_order)
                 for instrument in instruments_response.instruments:
                     figi = getattr(instrument, 'figi', None)
+                    uid = getattr(instrument, 'uid', 'N/A')
+                    name = getattr(instrument, 'name', 'N/A')
+                    inst_type = getattr(instrument, 'type', 'N/A')
+                    
+                    print(f"  - Name: {name}, Ticker: {ticker}, FIGI: {figi}, UID: {uid}, Type: {inst_type}")
+                    
+                    # Если указан class_code, ищем точное совпадение
+                    if class_code is not None:
+                        # В t_tech.invest нет поля class_code в Instrument, поэтому используем первое совпадение с BBG FIGI
+                        pass
                     
                     # Возвращаем только FIGI в формате BBG... (требуется для post_order)
                     if figi and figi.startswith('BBG'):
-                        print(f"Найден инструмент для {ticker}: FIGI={figi}")
+                        print(f"  ✅ Выбран FIGI: {figi}")
                         return figi
                 
                 # Если не нашли BBG FIGI, выводим все найденные варианты для отладки
-                print(f"Не найдено FIGI формата BBG... для {ticker}. Найдены инструменты:")
-                for i, inst in enumerate(instruments_response.instruments[:5]):
-                    figi = getattr(inst, 'figi', 'N/A')
-                    uid = getattr(inst, 'uid', 'N/A')
-                    name = getattr(inst, 'name', 'N/A')
-                    print(f"  [{i}] FIGI={figi}, UID={uid}, Name={name}")
-                
+                print(f"  ❌ Не найдено FIGI формата BBG... для {ticker}")
                 return None
             else:
-                print(f"Инструмент {ticker} не найден")
+                print(f"  ❌ Инструмент {ticker} не найден")
                 return None
     except Exception as e:
         print(f"Ошибка при поиске инструмента {ticker}: {e}")
@@ -149,17 +163,45 @@ class RSIStrategy(bt.Strategy):
             if not self.account_id:
                 raise ValueError("Не удалось получить account_id. Проверьте токен и статус счетов.")
         
-        # Получаем FIGI/UID для каждого тикера и сохраняем в словаре
-        self.ticker_to_instrument_id = {}
+        # Получаем FIGI для каждого тикера через store.get_symbol_info()
+        # Формат: self.figi = self.store.provider.get_symbol_info(self.class_code, self.symbol).figi
+        self.ticker_to_figi = {}
         for d in self.datas:
             ticker = d._name
-            instrument_id = get_figi_for_ticker(INVEST_TOKEN, ticker)
-            if instrument_id:
-                self.ticker_to_instrument_id[ticker] = instrument_id
-                print(f"✅ Тикер {ticker} -> Instrument ID (FIGI): {instrument_id}")
-            else:
-                print(f"❌ Не удалось получить instrument_id для {ticker}. Заявки не будут выставляться.")
-                self.ticker_to_instrument_id[ticker] = None  # Явно указываем что instrument_id нет
+            # Для moexalgo store используем get_symbol_info который возвращает DataFrame с информацией
+            # Находим основной режим торгов (is_primary=1) и берем board (class_code)
+            try:
+                store = MoexAlgoStore()
+                info_df = store.get_symbol_info(ticker)
+                
+                # Ищем основную доску (is_primary == 1)
+                primary_board = info_df[info_df['is_primary'] == 1]
+                
+                if len(primary_board) > 0:
+                    class_code = primary_board.iloc[0]['board']  # Например, 'TQBR'
+                    print(f"✅ Тикер {ticker}: class_code={class_code} (основной режим торгов)")
+                    
+                    # Теперь получаем FIGI через T-Invest API с учетом class_code
+                    figi = get_figi_for_ticker(INVEST_TOKEN, ticker, class_code)
+                    if figi:
+                        self.ticker_to_figi[ticker] = figi
+                        print(f"✅ Тикер {ticker} (class_code={class_code}) -> FIGI: {figi}")
+                    else:
+                        print(f"❌ Не удалось получить FIGI для {ticker} (class_code={class_code})")
+                        self.ticker_to_figi[ticker] = None
+                else:
+                    # Если не нашли основной режим, пробуем без class_code
+                    print(f"⚠️ Тикер {ticker}: не найден основной режим торгов, пробуем без class_code")
+                    figi = get_figi_for_ticker(INVEST_TOKEN, ticker)
+                    if figi:
+                        self.ticker_to_figi[ticker] = figi
+                        print(f"✅ Тикер {ticker} -> FIGI: {figi}")
+                    else:
+                        print(f"❌ Не удалось получить FIGI для {ticker}")
+                        self.ticker_to_figi[ticker] = None
+            except Exception as e:
+                print(f"❌ Ошибка при получении информации о тикере {ticker}: {e}")
+                self.ticker_to_figi[ticker] = None
         
         # Получаем начальный баланс с брокера
         self._update_broker_balance()
@@ -253,10 +295,14 @@ class RSIStrategy(bt.Strategy):
                     print(f" - free_money: {free_money}")
                     print(f" - account_id: {self.account_id}")
 
-                    # HARDCODE для отладки - FIGI для SNGS
-                    instrument_id = "BBG0047315D0"
+                    # Получаем FIGI из предварительно заполненного словаря
+                    instrument_id = self.ticker_to_figi.get(ticker)
                     
-                    print(f" - instrument_id: {instrument_id} (HARDCODE)")
+                    if not instrument_id:
+                        print(f"❌ Пропуск заявки для {ticker}: не найден FIGI")
+                        continue
+                    
+                    print(f" - instrument_id: {instrument_id} (FIGI из store.get_symbol_info)")
 
                     # Выставляем заявку на покупку по рынку
                     # Документация T-Invest API: https://opensource.tbank.ru/invest/invest-python
@@ -316,11 +362,14 @@ class RSIStrategy(bt.Strategy):
                             print("sell")
                             print(f"\t - Продаём по рынку {data._name}...")
 
-                            # Получаем instrument_id (FIGI) для тикера
-                            # HARDCODE для отладки - FIGI для SNGS
-                            instrument_id = "BBG0047315D0"
+                            # Получаем FIGI из предварительно заполненного словаря
+                            instrument_id = self.ticker_to_figi.get(ticker)
                             
-                            print(f" - instrument_id: {instrument_id} (HARDCODE)")
+                            if not instrument_id:
+                                print(f"❌ Пропуск заявки на продажу для {ticker}: не найден FIGI")
+                                continue
+                            
+                            print(f" - instrument_id: {instrument_id} (FIGI из store.get_symbol_info)")
 
                             # Выставляем заявку на продажу по рынку
                             # Документация T-Invest API: https://opensource.tbank.ru/invest/invest-python

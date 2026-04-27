@@ -1,81 +1,33 @@
 ```
 # Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Virtual environments
-venv/
-env/
-ENV/
-.venv/
-.env/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
+*.pyc
+*.pyo
+*.pyd
 
 # Logs
 *.log
 
-# OS
-.DS_Store
-Thumbs.db
-
-# Environment variables
+# Environment
 .env
 .env.local
-*.env.*
+.env.*
 
-# Coverage
-.coverage
-coverage/
-htmlcov/
-
-# MyPy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# PyTest
-.pytest_cache/
-
-# Temporary files
-*.tmp
-*~
-```
-
-Wait, let me reconsider. The only modified file is `StrategyExamplesMoexAlgo_ru/01-LiveTrade-brokerTbank.py` which appears to be a Python source file, and the existing `.gitignore`. Since there are no build artifacts, dependency directories, or other temporary files in the changes, and only a Python source file was modified along with the `.gitignore` itself, I should not add extensive ignore rules.
-
-```
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-
-# Virtual environments
+# Dependencies
+.venv/
 venv/
-.env/
+node_modules/
 
-# IDE
+# Build artifacts
+dist/
+build/
+target/
+
+# Editors
 .vscode/
+.idea/
+
+# System
+.DS_Store
+Thumbs.db
 ```
