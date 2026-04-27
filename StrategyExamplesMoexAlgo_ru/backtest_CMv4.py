@@ -212,27 +212,19 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
     if not use_super_candles_mode and (data_points is None or len(data_points) == 0):
         cache_key = get_cache_key(symbol, date_start, date_end, timeframe, compression, None)
         
-        # Проверяем кэш для DF режима
+        # Проверяем кэш для DF режима (только если не force_update)
         if use_cache and not force_update:
             loaded_data = load_from_cache(cache_key)
             if loaded_data is not None:
                 if isinstance(loaded_data, dict) and loaded_data.get('empty'):
-                    print(f"⚠ Выходной/праздничный день (пустой кэш DF) для {symbol} за {date_start.date()}")
-                    return {
-                        'date': date_start.date(),
-                        'start_cash': 100000.0,
-                        'end_cash': 100000.0,
-                        'pnl': 0.0,
-                        'pnl_percent': 0.0,
-                        'trades_count': 0,
-                        'strategy': None,
-                        'error': 'no_data',
-                        'skip_day': True
-                    }
-                data_points = loaded_data
-                print(f"✓ Данные загружены из кэша (DF режим): {cache_key}")
+                    print(f"⚠ Выходной/праздничный день (пустой кэш DF) для {symbol} за {date_start.date()} - пробуем перезапрос MOEX...")
+                    # Не возвращаем skip_day сразу, а пытаемся сделать перезапрос MOEX
+                    data_points = None  # Сбрасываем, чтобы触发запрос к MOEX ниже
+                else:
+                    data_points = loaded_data
+                    print(f"✓ Данные загружены из кэша (DF режим): {cache_key}")
         
-        # Если кэш пуст или не используется - запрашиваем MOEX без super_candles
+        # Если кэш пуст, не используется или был помечен как empty - запрашиваем MOEX без super_candles
         if data_points is None:
             print(f"📡 Проверка доступности DF для {symbol} ({date_start.date()})...")
             store = MoexAlgoStore()
