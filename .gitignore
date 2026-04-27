@@ -9,31 +9,29 @@ __pycache__/
 .venv/
 venv/
 env/
-requirements.txt.bak
-
-# Logs and temp files
-*.log
-*.tmp
-*.swp
-*.swo
-
-# Environment
 .env
 .env.local
-*.env.*
+.env.*
+
+# Logs
+*.log
 
 # Coverage
 .coverage
 coverage/
 htmlcov/
 
-# Editors
+# IDE
 .vscode/
 .idea/
-*.sublime-project
-*.sublime-workspace
+*.swp
+*.swo
+*.tmp
 
-# OS
-.DS_Store
-Thumbs.db
+# Build artifacts
+dist/
+build/
+*.o
+*.obj
+*.out
 ```

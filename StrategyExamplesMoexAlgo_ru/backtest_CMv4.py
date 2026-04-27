@@ -12,6 +12,10 @@ from backtrader_moexalgo.moexalgo_store import MoexAlgoStore
 # Директория для кэширования данных
 CACHE_DIR = os.path.join(os.path.dirname(__file__), 'data_cache')
 
+# Глобальный словарь для хранения статуса доступности SuperCandles по тикерам
+# Ключ - symbol, значение - True/False (доступны/недоступны)
+_super_candles_availability_cache = {}
+
 
 def is_russian_holiday(date):
     """Проверка, является ли дата праздничным днём в России"""
@@ -111,9 +115,10 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
     """Запуск бэктеста для одного дня
     
     Логика работы:
-    1. Сначала запрашиваем MOEX (без кэша!) с попыткой получить super_candles
-    2. Если super_cangles доступны - работаем с ними, кэшируем и используем кэш
-    3. Если super_candles недоступны - переключаемся на обычные свечи (DF),
+    1. Проверяем глобальный кэш доступности SuperCandles для тикера
+    2. Если статус уже известен - сразу используем соответствующий режим
+    3. Если статус неизвестен - пробуем получить super_candles, кэшируем результат
+    4. Если super_candles недоступны - переключаемся на обычные свечи (DF),
        далее для DF используем кэш (проверяем перед запросом)
     """
     cerebro = bt.Cerebro()
@@ -126,90 +131,112 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
     compression = 10
     
     # ============================================================
-    # ШАГ 1: Пробуем получить super_candles напрямую из MOEX (без кэша)
+    # ШАГ 1: Проверяем кэш доступности SuperCandles для тикера
     # ============================================================
-    print(f"📡 Проверка доступности super_candles для {symbol} ({date_start.date()})...")
+    if symbol in _super_candles_availability_cache:
+        # Статус уже известен - не проверяем повторно
+        cached_availability = _super_candles_availability_cache[symbol]
+        if cached_availability:
+            print(f"✓ SuperCandles для {symbol} доступны (из кэша)")
+        else:
+            print(f"✓ SuperCandles для {symbol} недоступны (из кэша), используем DF режим")
+    else:
+        cached_availability = None
+        print(f"📡 Первая проверка доступности super_candles для {symbol}...")
+    
     store = MoexAlgoStore()
     
     super_candles_available = False
     data_points = None
     use_super_candles_mode = False
     
-    # Первый запрос - всегда без кэша, пытаемся получить super_candles
-    getdata_kwargs = {
-        'dataname': symbol,
-        'fromdate': date_start,
-        'todate': date_end,
-        'timeframe': timeframe,
-        'compression': compression,
-        'live_bars': False,
-        'super_candles': True,
-        'metric': 'tradestats'
-    }
-    
-    try:
-        data = store.getdata(**getdata_kwargs)
+    # Если статус уже известен из кэша и SuperCandles недоступны - сразу переходим к DF
+    if cached_availability is False:
+        use_super_candles_mode = False
+        super_candles_available = False
+    else:
+        # Первый запрос - всегда без кэша, пытаемся получить super_candles (если статус неизвестен)
+        getdata_kwargs = {
+            'dataname': symbol,
+            'fromdate': date_start,
+            'todate': date_end,
+            'timeframe': timeframe,
+            'compression': compression,
+            'live_bars': False,
+            'super_candles': True,
+            'metric': 'tradestats'
+        }
         
-        # ВАЖНО: Для корректной работы нужно вызвать start() для загрузки данных
-        data.start()
-        
-        # Проверяем, есть ли данные и super_candles
-        data_points = []
-        has_data = False
-        
-        for d in data:
-            if len(d.open) == 0 or len(d.high) == 0 or len(d.low) == 0 or len(d.close) == 0:
-                continue
-            has_data = True
-            point = {
-                'datetime': d.datetime[0],
-                'open': d.open[0],
-                'high': d.high[0],
-                'low': d.low[0],
-                'close': d.close[0],
-                'volume': d.volume[0]
-            }
-            data_points.append(point)
-        
-        # Если данные получены, проверяем наличие tradestats
-        if has_data:
-            if hasattr(data, 'p') and hasattr(data.p, 'supercandles') and symbol in data.p.supercandles:
-                sc_list = data.p.supercandles[symbol].get('tradestats', [])
-                if sc_list:
-                    # Super_candles доступны!
-                    super_candles_available = True
-                    use_super_candles_mode = True
-                    
-                    # Переворачиваем список tradestats
-                    sc_list_reversed = list(reversed(sc_list))
-                    
-                    # Добавляем поля tradestats к точкам данных
-                    for i, point in enumerate(data_points):
-                        if i < len(sc_list_reversed):
-                            sc_data = sc_list_reversed[i]
-                            if sc_data:
-                                for key, value in sc_data.items():
-                                    point[f'tradestats_{key}'] = value
-                    print("✓ Super_candles (tradestats) доступны - работаем в режиме super_candles")
-                else:
-                    print("⚠ Super_candles запрошены, но tradestats пуст - переключаемся на DF режим")
-            else:
-                print("⚠ Super_candles недоступны (нет данных в ответе) - переключаемся на DF режим")
-        else:
-            print(f"⚠ Нет данных для {symbol} за {date_start.date()} (super_candles) - пробуем DF режим...")
-            data_points = None
-            use_super_candles_mode = False
-            super_candles_available = False
+        try:
+            data = store.getdata(**getdata_kwargs)
             
-    except Exception as e:
-        error_msg = str(e)
-        if '403' in error_msg or 'Forbidden' in error_msg or 'tradestats' in error_msg.lower():
-            print(f"⚠ Ошибка доступа к super_candles: {e} - переключаемся на DF режим")
-            super_candles_available = False
-            use_super_candles_mode = False
-            data_points = None
-        else:
-            raise
+            # ВАЖНО: Для корректной работы нужно вызвать start() для загрузки данных
+            data.start()
+            
+            # Проверяем, есть ли данные и super_candles
+            data_points = []
+            has_data = False
+            
+            for d in data:
+                if len(d.open) == 0 or len(d.high) == 0 or len(d.low) == 0 or len(d.close) == 0:
+                    continue
+                has_data = True
+                point = {
+                    'datetime': d.datetime[0],
+                    'open': d.open[0],
+                    'high': d.high[0],
+                    'low': d.low[0],
+                    'close': d.close[0],
+                    'volume': d.volume[0]
+                }
+                data_points.append(point)
+            
+            # Если данные получены, проверяем наличие tradestats
+            if has_data:
+                if hasattr(data, 'p') and hasattr(data.p, 'supercandles') and symbol in data.p.supercandles:
+                    sc_list = data.p.supercandles[symbol].get('tradestats', [])
+                    if sc_list:
+                        # Super_candles доступны!
+                        super_candles_available = True
+                        use_super_candles_mode = True
+                        
+                        # Кэшируем статус доступности
+                        _super_candles_availability_cache[symbol] = True
+                        
+                        # Переворачиваем список tradestats
+                        sc_list_reversed = list(reversed(sc_list))
+                        
+                        # Добавляем поля tradestats к точкам данных
+                        for i, point in enumerate(data_points):
+                            if i < len(sc_list_reversed):
+                                sc_data = sc_list_reversed[i]
+                                if sc_data:
+                                    for key, value in sc_data.items():
+                                        point[f'tradestats_{key}'] = value
+                        print("✓ Super_candles (tradestats) доступны - работаем в режиме super_candles")
+                    else:
+                        print("⚠ Super_candles запрошены, но tradestats пуст - переключаемся на DF режим")
+                        _super_candles_availability_cache[symbol] = False
+                else:
+                    print("⚠ Super_candles недоступны (нет данных в ответе) - переключаемся на DF режим")
+                    _super_candles_availability_cache[symbol] = False
+            else:
+                print(f"⚠ Нет данных для {symbol} за {date_start.date()} (super_candles) - пробуем DF режим...")
+                data_points = None
+                use_super_candles_mode = False
+                super_candles_available = False
+                _super_candles_availability_cache[symbol] = False
+                
+        except Exception as e:
+            error_msg = str(e)
+            if '403' in error_msg or 'Forbidden' in error_msg or 'tradestats' in error_msg.lower() or 'limit' in error_msg.lower():
+                print(f"⚠ Ошибка доступа к super_candles: {e} - переключаемся на DF режим")
+                super_candles_available = False
+                use_super_candles_mode = False
+                data_points = None
+                _super_candles_availability_cache[symbol] = False
+            else:
+                raise
     
     # ============================================================
     # ШАГ 2: Определяем режим работы и обрабатываем данные
@@ -230,7 +257,6 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
         
         # Если кэш не найден или не используется - запрашиваем MOEX без super_candles
         if not cached_data_found:
-            print(f"📡 Проверка доступности DF для {symbol} ({date_start.date()})...")
             store = MoexAlgoStore()
             
             getdata_kwargs = {

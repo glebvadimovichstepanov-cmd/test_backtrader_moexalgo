@@ -52,6 +52,10 @@ class MoexAlgoData(DataBase):
             "none": []
         }
 
+        # Флаг доступности SuperCandles для тикера (проверяется только один раз)
+        self._super_candles_checked = False
+        self._super_candles_available = None
+
         if hasattr(self.p, 'timeframe'): self.timeframe = self.p.timeframe
         if hasattr(self.p, 'compression'): self.compression = self.p.compression
         if hasattr(self.p, 'fromdate') and self.p.fromdate is not None:
@@ -199,7 +203,6 @@ class MoexAlgoData(DataBase):
                                                                         metric=self.metric)
                     if not super_candles_available:
                         # Если SuperCandles недоступны, переключаемся на обычные свечи DF
-                        print(f"{self.symbol} - SuperCandles недоступны, используем обычные данные DF")
                         self.super_candles = False
                         klines, get_live_bars_from = self.get_candles(from_date=self.get_live_bars_from,
                                                                       symbol=self.symbol,
@@ -272,7 +275,6 @@ class MoexAlgoData(DataBase):
                                                                     metric=self.metric)  # , is_test=True
                 if not super_candles_available:
                     # Если SuperCandles недоступны, переключаемся на обычные свечи DF
-                    print(f"{self.symbol} - SuperCandles недоступны, используем обычные данные DF")
                     self.super_candles = False
                     klines, get_live_bars_from = self.get_candles(from_date=self.from_date,
                                                                   symbol=self.symbol,
@@ -413,7 +415,6 @@ class MoexAlgoData(DataBase):
         super_candles_available = self._check_super_candles_availability(ticker, metric)
         if not super_candles_available:
             # Если SuperCandles недоступны, возвращаем пустой DataFrame и флаг
-            print(f"{symbol} - SuperCandles ({metric}) недоступны. Используем обычные данные DF.")
             return pd.DataFrame(), None, False
         
         while True:  # Будем получать данные пока не получим все
@@ -503,20 +504,33 @@ class MoexAlgoData(DataBase):
             :param str metric: Метрика. 'tradestats' - сделки, 'orderstats' - заявки, 'obstats' - стакан
             :return: True если SuperCandles доступны, False иначе
         """
+        # Проверяем, была ли уже выполнена проверка для этого тикера
+        if self._super_candles_checked:
+            return self._super_candles_available
+        
         try:
-            # Пробуем получить одну запись для проверки доступности
+            # Пробуем получить одну запись для проверки доступности без параметра limit
+            # Используем start/end с одинаковой датой для получения минимального количества данных
+            from datetime import date
+            test_date = date(2024, 1, 1)
             if metric == 'tradestats':
-                iterator = ticker.tradestats(limit=1)
+                iterator = ticker.tradestats(start=test_date, end=test_date)
             elif metric == 'orderstats':
-                iterator = ticker.orderstats(limit=1)
+                iterator = ticker.orderstats(start=test_date, end=test_date)
             elif metric == 'obstats':
-                iterator = ticker.obstats(limit=1)
+                iterator = ticker.obstats(start=test_date, end=test_date)
             else:
+                self._super_candles_checked = True
+                self._super_candles_available = False
                 return False
             
             # Пытаемся получить первую запись
             next(iterator)
+            self._super_candles_checked = True
+            self._super_candles_available = True
             return True
         except Exception as e:
             print(f"{self.symbol} - Ошибка при проверке SuperCandles ({metric}): {e}")
+            self._super_candles_checked = True
+            self._super_candles_available = False
             return False
