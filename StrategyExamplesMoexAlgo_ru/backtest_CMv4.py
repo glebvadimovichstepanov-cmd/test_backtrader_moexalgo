@@ -2,29 +2,125 @@ import backtrader as bt
 import datetime
 import sys
 import os
+import pickle
+import hashlib
 
 from strategy_cmv4_pl import StrategyCMV4PL
 from backtrader_moexalgo.moexalgo_store import MoexAlgoStore
 
 
-def run_daily_backtest(date_start, date_end, symbol='SNGS'):
+# Директория для кэширования данных
+CACHE_DIR = os.path.join(os.path.dirname(__file__), 'data_cache')
+
+
+def get_cache_key(symbol, fromdate, todate, timeframe, compression, metric):
+    """Генерация уникального ключа для кэша на основе параметров"""
+    key_str = f"{symbol}_{fromdate}_{todate}_{timeframe}_{compression}_{metric}"
+    return hashlib.md5(key_str.encode()).hexdigest()
+
+
+def load_from_cache(cache_key):
+    """Загрузка данных из кэша"""
+    cache_file = os.path.join(CACHE_DIR, f"{cache_key}.pkl")
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'rb') as f:
+                data = pickle.load(f)
+            print(f"✓ Данные загружены из кэша: {cache_file}")
+            return data
+        except Exception as e:
+            print(f"⚠ Ошибка загрузки из кэша: {e}")
+    return None
+
+
+def save_to_cache(cache_key, data):
+    """Сохранение данных в кэш"""
+    if not os.path.exists(CACHE_DIR):
+        os.makedirs(CACHE_DIR)
+    
+    cache_file = os.path.join(CACHE_DIR, f"{cache_key}.pkl")
+    try:
+        with open(cache_file, 'wb') as f:
+            pickle.dump(data, f)
+        print(f"✓ Данные сохранены в кэш: {cache_file}")
+    except Exception as e:
+        print(f"⚠ Ошибка сохранения в кэш: {e}")
+
+
+def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, force_update=False):
     """Запуск бэктеста для одного дня"""
     cerebro = bt.Cerebro()
     
     # Добавляем стратегию CMV4
     cerebro.addstrategy(StrategyCMV4PL)
     
-    # Создаем хранилище и получаем данные
-    store = MoexAlgoStore()
-    data = store.getdata(
-        dataname=symbol,
-        fromdate=date_start,
-        todate=date_end,
-        timeframe=bt.TimeFrame.Minutes,
-        compression=10,  # 10m свечи для интрадей стратегии
-        metric='tradestats',  # Используем расширенные данные для интрадея
-        live_bars=False
-    )
+    # Параметры для кэширования
+    timeframe = bt.TimeFrame.Minutes
+    compression = 10
+    metric = 'tradestats'
+    
+    cache_key = get_cache_key(symbol, date_start, date_end, timeframe, compression, metric)
+    
+    # Пытаемся загрузить из кэша
+    data = None
+    if use_cache and not force_update:
+        data = load_from_cache(cache_key)
+    
+    # Если нет в кэше или требуется обновление - загружаем через moexalgo
+    if data is None:
+        print(f"📡 Загрузка данных для {symbol} ({date_start.date()} - {date_end.date()})...")
+        store = MoexAlgoStore()
+        # Для получения данных tradestats нужно включить режим super_candles
+        data = store.getdata(
+            dataname=symbol,
+            fromdate=date_start,
+            todate=date_end,
+            timeframe=timeframe,
+            compression=compression,
+            metric=metric,
+            live_bars=False,
+            super_candles=True  # Включаем режим Super Candles для получения tradestats
+        )
+        
+        # Сохраняем в кэш
+        if use_cache:
+            # Для кэширования нужно собрать данные в список
+            # т.к. backtrader данные ленивые
+            # Также собираем данные tradestats из p.supercandles
+            data_points = []
+            
+            # Проходим по данным для их загрузки и заполнения supercandles
+            for d in data:
+                point = {
+                    'datetime': d.datetime[0],
+                    'open': d.open[0],
+                    'high': d.high[0],
+                    'low': d.low[0],
+                    'close': d.close[0],
+                    'volume': d.volume[0]
+                }
+                data_points.append(point)
+            
+            # После итерации данные supercandles должны быть заполнены
+            # Они хранятся в обратном порядке (последние добавляются в начало)
+            if hasattr(data, 'p') and hasattr(data.p, 'supercandles') and symbol in data.p.supercandles:
+                sc_list = data.p.supercandles[symbol].get(metric, [])
+                # Переворачиваем список, чтобы привести к правильному порядку
+                sc_list_reversed = list(reversed(sc_list))
+                
+                # Добавляем поля tradestats к соответствующим точкам данных
+                for i, point in enumerate(data_points):
+                    if i < len(sc_list_reversed):
+                        sc_data = sc_list_reversed[i]
+                        if sc_data:
+                            for key, value in sc_data.items():
+                                point[f'tradestats_{key}'] = value
+            
+            save_to_cache(cache_key, data_points)
+            # Пересоздаем объект data из кэшированных данных
+            data = bt.feeds.PandasData(dataname=__import__('pandas').DataFrame(data_points))
+            data._dataname = symbol
+    
     cerebro.adddata(data)
     
     # Параметры брокера
