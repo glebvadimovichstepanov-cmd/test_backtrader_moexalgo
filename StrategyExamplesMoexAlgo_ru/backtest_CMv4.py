@@ -57,7 +57,7 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
     # Параметры для кэширования
     timeframe = bt.TimeFrame.Minutes
     compression = 10
-    metric = 'tradestats'
+    metric = None  # Отключаем tradestats по умолчанию (требует платной подписки)
     
     cache_key = get_cache_key(symbol, date_start, date_end, timeframe, compression, metric)
     
@@ -70,17 +70,22 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
     if data is None:
         print(f"📡 Загрузка данных для {symbol} ({date_start.date()} - {date_end.date()})...")
         store = MoexAlgoStore()
-        # Для получения данных tradestats нужно включить режим super_candles
-        data = store.getdata(
-            dataname=symbol,
-            fromdate=date_start,
-            todate=date_end,
-            timeframe=timeframe,
-            compression=compression,
-            metric=metric,
-            live_bars=False,
-            super_candles=True  # Включаем режим Super Candles для получения tradestats
-        )
+        # Параметры для запроса
+        getdata_kwargs = {
+            'dataname': symbol,
+            'fromdate': date_start,
+            'todate': date_end,
+            'timeframe': timeframe,
+            'compression': compression,
+            'live_bars': False
+        }
+        
+        # Добавляем super_candles и metric только если metric не None
+        if metric is not None:
+            getdata_kwargs['super_candles'] = True
+            getdata_kwargs['metric'] = metric
+        
+        data = store.getdata(**getdata_kwargs)
         
         # Сохраняем в кэш
         if use_cache:
@@ -103,7 +108,8 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
             
             # После итерации данные supercandles должны быть заполнены
             # Они хранятся в обратном порядке (последние добавляются в начало)
-            if hasattr(data, 'p') and hasattr(data.p, 'supercandles') and symbol in data.p.supercandles:
+            # Добавляем поля tradestats только если metric был указан
+            if metric is not None and hasattr(data, 'p') and hasattr(data.p, 'supercandles') and symbol in data.p.supercandles:
                 sc_list = data.p.supercandles[symbol].get(metric, [])
                 # Переворачиваем список, чтобы привести к правильному порядку
                 sc_list_reversed = list(reversed(sc_list))
