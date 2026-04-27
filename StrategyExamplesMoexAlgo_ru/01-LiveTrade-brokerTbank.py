@@ -73,17 +73,14 @@ def get_figi_for_ticker(token, ticker):
                 # Берем первый найденный инструмент
                 instrument = instruments_response.instruments[0]
                 figi = getattr(instrument, 'figi', None)
-                instrument_uid = getattr(instrument, 'uid', None)
                 
-                print(f"Найден инструмент для {ticker}: FIGI={figi}, UID={instrument_uid}")
+                print(f"Найден инструмент для {ticker}: FIGI={figi}")
                 
-                # Возвращаем instrument_uid (предпочтительно для нового API) или FIGI
-                if instrument_uid:
-                    return instrument_uid
-                elif figi:
+                # Возвращаем только FIGI (требуется для post_order)
+                if figi:
                     return figi
                 else:
-                    print(f"Не удалось получить FIGI или UID для {ticker}")
+                    print(f"Не удалось получить FIGI для {ticker}")
                     return None
             else:
                 print(f"Инструмент {ticker} не найден")
