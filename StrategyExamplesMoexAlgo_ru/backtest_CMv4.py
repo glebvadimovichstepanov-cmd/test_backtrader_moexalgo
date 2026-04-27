@@ -146,6 +146,9 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
     try:
         data = store.getdata(**getdata_kwargs)
         
+        # ВАЖНО: Для корректной работы нужно вызвать start() для загрузки данных
+        data.start()
+        
         # Проверяем, есть ли данные и super_candles
         data_points = []
         has_data = False
@@ -213,19 +216,22 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
         cache_key = get_cache_key(symbol, date_start, date_end, timeframe, compression, None)
         
         # Проверяем кэш для DF режима (только если не force_update)
+        cached_data_found = False
         if use_cache and not force_update:
             loaded_data = load_from_cache(cache_key)
             if loaded_data is not None:
                 if isinstance(loaded_data, dict) and loaded_data.get('empty'):
                     print(f"⚠ Выходной/праздничный день (пустой кэш DF) для {symbol} за {date_start.date()} - пробуем перезапрос MOEX...")
-                    # Не возвращаем skip_day сразу, а пытаемся сделать перезапрос MOEX
-                    data_points = None  # Сбрасываем, чтобы触发запрос к MOEX ниже
+                    # Помечаем, что нужно сделать запрос к MOEX (не используем кэш)
+                    cached_data_found = False
+                    data_points = None  # Сбрасываем, чтобы выполнить запрос к MOEX ниже
                 else:
                     data_points = loaded_data
+                    cached_data_found = True
                     print(f"✓ Данные загружены из кэша (DF режим): {cache_key}")
         
-        # Если кэш пуст, не используется или был помечен как empty - запрашиваем MOEX без super_candles
-        if data_points is None:
+        # Если кэш не найден, не используется или был помечен как empty - запрашиваем MOEX без super_candles
+        if not cached_data_found:
             print(f"📡 Проверка доступности DF для {symbol} ({date_start.date()})...")
             store = MoexAlgoStore()
             
@@ -240,6 +246,9 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
             
             try:
                 data = store.getdata(**getdata_kwargs)
+                
+                # ВАЖНО: Для корректной работы нужно вызвать start() для загрузки данных
+                data.start()
                 
                 data_points = []
                 has_data = False
