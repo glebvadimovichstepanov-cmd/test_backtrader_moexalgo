@@ -26,13 +26,11 @@ INVEST_ACCOUNT_ID = os.getenv('INVEST_ACCOUNT_ID', None)
 from Config import Config as ConfigMOEX  # для авторизации на Московской Бирже
 
 # Импортируем утилиты для работы с инструментами
-from tinkoff_utils import InstrumentCache
+from tinkoff_utils import get_instrument_by_ticker, get_instrument_by_uid, get_instrument_by_figi, get_figi_by_ticker
 
 
 # Глобальный токен для работы с Tinkoff API
 _tinkoff_token = None
-# Глобальный кэш инструментов
-_instrument_cache = None
 
 def get_tinkoff_token():
     """Получить токен Tinkoff API"""
@@ -41,13 +39,6 @@ def get_tinkoff_token():
         _tinkoff_token = INVEST_TOKEN
     return _tinkoff_token
 
-
-def get_instrument_cache():
-    """Получить кэш инструментов (создает при первом вызове)"""
-    global _instrument_cache
-    if _instrument_cache is None:
-        _instrument_cache = InstrumentCache(INVEST_TOKEN)
-    return _instrument_cache
 
 def get_account_id(token):
     """Получить ID активного счета"""
@@ -79,7 +70,7 @@ def get_figi_for_ticker(token, ticker, class_code=None):
     
     Args:
         token: Токен доступа к T-Invest API
-        ticker: Тикер инструмента (например, 'SNGS')
+        ticker: Тикер инструмента (например, 'SNGS') - точное совпадение
         class_code: Код режима торгов/доски (например, 'TQBR'). Если None, используется первый найденный.
     
     Returns:
@@ -91,17 +82,36 @@ def get_figi_for_ticker(token, ticker, class_code=None):
             instruments_response = client.instruments.find_instrument(query=ticker)
             
             if hasattr(instruments_response, 'instruments') and instruments_response.instruments:
-                # Ищем инструмент с FIGI формата BBG... (требуется для post_order)
+                # Ищем инструмент с ТОЧНЫМ совпадением тикера и FIGI формата BBG...
                 for instrument in instruments_response.instruments:
+                    inst_ticker = getattr(instrument, 'ticker', None)
                     figi = getattr(instrument, 'figi', None)
                     
-                    # Возвращаем только FIGI в формате BBG... (требуется для post_order)
-                    if figi and figi.startswith('BBG'):
-                        return figi
+                    # Строгое сравнение тикеров - должно полностью совпадать
+                    # Это критично чтобы избежать путаницы между SNGS и SNGSP
+                    if inst_ticker == ticker and figi and figi.startswith('BBG'):
+                        # Если указан class_code, проверяем совпадение
+                        if class_code is not None:
+                            inst_class_code = getattr(instrument, 'class_code', None)
+                            if inst_class_code == class_code:
+                                return figi
+                        else:
+                            return figi
                 
-                # Если не нашли BBG FIGI, возвращаем None
+                # Если не нашли с class_code, пробуем без него (но все равно с точным совпадением тикера)
+                if class_code is not None:
+                    print(f"⚠️ Не найден инструмент {ticker} с class_code={class_code}, пробуем без class_code")
+                    for instrument in instruments_response.instruments:
+                        inst_ticker = getattr(instrument, 'ticker', None)
+                        figi = getattr(instrument, 'figi', None)
+                        if inst_ticker == ticker and figi and figi.startswith('BBG'):
+                            return figi
+                
+                # Если не нашли BBG FIGI с точным совпадением тикера, возвращаем None
+                print(f"❌ Не найден инструмент с точным совпадением тикера {ticker} и FIGI формата BBG...")
                 return None
             else:
+                print(f"❌ Инструменты не найдены для запроса: {ticker}")
                 return None
     except Exception as e:
         print(f"Ошибка при поиске инструмента {ticker}: {e}")
@@ -116,9 +126,6 @@ def print_positions_info(token, account_id):
         account_id: ID счета
     """
     try:
-        # Получаем кэш инструментов для быстрого поиска по UID/FIGI
-        cache = get_instrument_cache()
-        
         with Client(token) as client:
             # Получаем портфель
             portfolio_response = client.operations.get_portfolio(account_id=account_id)
@@ -161,34 +168,44 @@ def print_positions_info(token, account_id):
                 position_value = lots * price_value
                 total_value += position_value
                 
-                # Пытаемся получить тикер и FIGI через кэш инструментов
+                # Пытаемся получить тикер и FIGI через онлайн запросы
                 ticker = 'N/A'
                 figi = 'N/A'
                 
                 # Сначала пробуем найти по UID (это наиболее надежный идентификатор в новом API)
                 if instrument_uid:
-                    inst_info = cache.get_by_uid(instrument_uid)
+                    inst_info = get_instrument_by_uid(token, instrument_uid)
                     if inst_info:
                         ticker = inst_info.get('ticker', 'N/A')
                         figi = inst_info.get('figi', 'N/A')
                 
                 # Если не нашли по UID, пробуем по FIGI из позиции
                 if ticker == 'N/A' and figi_from_pos:
-                    inst_info = cache.get_by_figi(figi_from_pos)
+                    inst_info = get_instrument_by_figi(token, figi_from_pos)
                     if inst_info:
                         ticker = inst_info.get('ticker', 'N/A')
                         figi = figi_from_pos
                 
-                # Если все еще не нашли, пробуем старый метод через find_instrument
+                # Если все еще не нашли, пробуем найти по тикуру через find_instrument
                 if ticker == 'N/A':
+                    # Пробуем использовать class_code для более точного поиска
                     try:
+                        # Получаем информацию о тикере из позиции - может быть в instrument_type
+                        inst_type = getattr(pos, 'instrument_type', '')
+                        # Если есть тип инструмента, можно попробовать использовать его для уточнения поиска
+                        # Но пока просто ищем по первому доступному идентификатору
                         search_id = instrument_uid if instrument_uid else figi_from_pos
                         if search_id:
                             inst_response = client.instruments.find_instrument(query=search_id)
                             if hasattr(inst_response, 'instruments') and inst_response.instruments:
-                                inst = inst_response.instruments[0]
-                                ticker = getattr(inst, 'ticker', 'N/A')
-                                figi = getattr(inst, 'figi', search_id)
+                                # Ищем точное совпадение по UID или FIGI
+                                for inst in inst_response.instruments:
+                                    inst_uid = getattr(inst, 'uid', None)
+                                    inst_figi = getattr(inst, 'figi', None)
+                                    if inst_uid == instrument_uid or inst_figi == figi_from_pos:
+                                        ticker = getattr(inst, 'ticker', 'N/A')
+                                        figi = getattr(inst, 'figi', search_id)
+                                        break
                     except Exception as e:
                         logger.debug(f"Не удалось найти инструмент через find_instrument: {e}")
                 
