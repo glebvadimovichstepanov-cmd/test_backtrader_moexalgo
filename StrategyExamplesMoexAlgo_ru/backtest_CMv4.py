@@ -334,6 +334,7 @@ def main():
                 
                 # Пропускаем дни без данных (не добавляем в статистику)
                 if result.get('error') == 'no_data' or result.get('cached'):
+                    current_date += datetime.timedelta(days=1)
                     continue
                 
                 daily_results.append(result)
