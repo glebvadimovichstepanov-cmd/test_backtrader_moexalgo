@@ -357,7 +357,16 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
         }
     
     # Создаем объект data из data_points
-    data = bt.feeds.PandasData(dataname=pd.DataFrame(data_points))
+    # Важно: явно указываем имена колонок для PandasData, чтобы избежать ошибок с типами данных
+    df = pd.DataFrame(data_points)
+    data = bt.feeds.PandasData(dataname=df, 
+                                datetime='datetime',
+                                open='open',
+                                high='high',
+                                low='low',
+                                close='close',
+                                volume='volume',
+                                openinterest=-1)
     data._dataname = symbol
     
     cerebro.adddata(data)
