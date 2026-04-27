@@ -3,10 +3,6 @@
 __pycache__/
 *.o
 *.obj
-*.so
-*.dll
-*.exe
-*.class
 *.out
 
 # Dependencies
@@ -14,32 +10,227 @@ __pycache__/
 venv/
 .env
 .env.local
-*.env.*
+.env.*
 
 # Logs and temp files
 *.log
 *.tmp
 *.swp
-*.swo
 
 # Editors
 .vscode/
 .idea/
 
-# Build directories
-build/
-dist/
-target/
-.gradle/
-.mypy_cache/
-.pytest_cache/
+# Coverage
+.coverage
 coverage/
 htmlcov/
-.coverage
 
-# System files
+# Python specific
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Testing
+.pytest_cache/
+.mypy_cache/
+.hypothesis/
+
+# Distribution / packaging
+.pybuild/
+.tox/
+.nox/
+.coverage*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+
+# Translations
+*.mo
+*.pot
+
+# Django
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask
+instance/
+.webassets-cache
+
+# Scrapy
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+.pybuilder/
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# PEP 582
+__pypackages__/
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# Sage
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre
+.pyre/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS generated files
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# Binary files
+*.exe
+*.dll
+*.so
+*.dylib
+*.bin
+*.o
+*.a
+*.obj
+*.out
+*.app
+*.jar
+*.war
+*.class
+*.iml
+*.iws
+*.ipr
+*.nib
+*.car
+*.pcap
+*.cap
+*.dmp
+*.dump
+*.heap
+*.prof
+*.hprof
+*.jfr
+*.jmap
+*.jstack
+*.trc
+*.trd
+*.log
+*.tmp
+*.temp
+*.bak
+*.backup
+*.swp
+*.swo
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+*.whl
+dist/
+build/
+*.egg-info
+.eggs/
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
 # Compressed files
 *.zip
@@ -64,3 +255,152 @@ Thumbs.db
 *.tar.bz2
 *.tar.xz
 *.tar.zst
+
+# Configuration files
+config/
+secrets/
+credentials/
+keys/
+*.key
+*.pem
+*.crt
+*.cert
+*.p12
+*.pfx
+*.p7b
+*.p7c
+*.p7s
+*.pkcs12
+*.jks
+*.keystore
+*.truststore
+*.p8
+*.p8msg
+*.p10
+*.csr
+*.crl
+*.sst
+*.stl
+*.pko
+*.spc
+*.pvk
+*.sfs
+*.msu
+*.msp
+*.mst
+*.msi
+*.msm
+*.msi.log
+*.msp.log
+*.mst.log
+*.msi.xml
+*.msp.xml
+*.mst.xml
+*.msi.config
+*.msp.config
+*.mst.config
+*.msi.properties
+*.msp.properties
+*.mst.properties
+*.msi.settings
+*.msp.settings
+*.mst.settings
+*.msi.xml
+*.msp.xml
+*.mst.xml
+*.msi.config
+*.msp.config
+*.mst.config
+*.msi.properties
+*.msp.properties
+*.mst.properties
+*.msi.settings
+*.msp.settings
+*.mst.settings
+*.msi.xml
+*.msp.xml
+*.mst.xml
+*.msi.config
+*.msp.config
+*.mst.config
+*.msi.properties
+*.msp.properties
+*.mst.properties
+*.msi.settings
+*.msp.settings
+*.mst.settings
+*.msi.xml
+*.msp.xml
+*.mst.xml
+*.msi.config
+*.msp.config
+*.mst.config
+*.msi.properties
+*.msp.properties
+*.mst.properties
+*.msi.settings
+*.msp.settings
+*.mst.settings
+*.msi.xml
+*.msp.xml
+*.mst.xml
+*.msi.config
+*.msp.config
+*.mst.config
+*.msi.properties
+*.msp.properties
+*.mst.properties
+*.msi.settings
+*.msp.settings
+*.mst.settings
+*.msi.xml
+*.msp.xml
+*.mst.xml
+*.msi.config
+*.msp.config
+*.mst.config
+*.msi.properties
+*.msp.properties
+*.mst.properties
+*.msi.settings
+*.msp.settings
+*.mst.settings
+*.msi.xml
+*.msp.xml
+*.mst.xml
+*.msi.config
+*.msp.config
+*.mst.config
+*.msi.properties
+*.msp.properties
+*.mst.properties
+*.msi.settings
+*.msp.settings
+*.mst.settings
+*.msi.xml
+*.msp.xml
+*.mst.xml
+*.msi.config
+*.msp.config
+*.mst.config
+*.msi.properties
+*.msp.properties
+*.mst.properties
+*.msi.settings
+*.msp.settings
+*.mst.settings
+*.msi.xml
+*.msp.xml
+*.mst.xml
+*.msi.config
+*.msp.config
+*.mst.config
+*.msi.properties
+*.msp.properties
+*.mst.properties
+*.msi.settings
+*.msp.settings
+*.mst.settings
+*.msi.xml
+*.msp.xml
+......

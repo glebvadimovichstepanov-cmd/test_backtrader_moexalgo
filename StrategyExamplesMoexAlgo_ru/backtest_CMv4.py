@@ -137,7 +137,8 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
                     'trades_count': 0,
                     'strategy': None,
                     'error': 'no_data',
-                    'cached': True  # Флаг: данные загружены из кэша
+                    'cached': True,  # Флаг: данные загружены из кэша
+                    'skip_day': True  # Флаг: нужно пропустить этот день в цикле
                 }
             # Данные успешно загружены из кэша
             data_points = loaded_data
@@ -201,7 +202,8 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
                         'pnl_percent': 0.0,
                         'trades_count': 0,
                         'strategy': None,
-                        'error': 'no_data'
+                        'error': 'no_data',
+                        'skip_day': True  # Флаг: нужно пропустить этот день в цикле
                     }
                 
                 # Если использовали super_candles, пробуем добавить tradestats
@@ -333,7 +335,8 @@ def main():
                 result = run_daily_backtest(day_start, day_end)
                 
                 # Пропускаем дни без данных (не добавляем в статистику)
-                if result.get('error') == 'no_data' or result.get('cached'):
+                # Это происходит только для выходных/праздничных дней с пустым кэшем
+                if result.get('skip_day'):
                     current_date += datetime.timedelta(days=1)
                     continue
                 
