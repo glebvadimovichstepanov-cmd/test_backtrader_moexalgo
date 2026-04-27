@@ -1,38 +1,4 @@
 ```
-# Compiled Python files
-*.pyc
-__pycache__/
-
-# Logs and temp files
-*.log
-*.tmp
-*.swp
-
-# Environment files
-.env
-.env.local
-*.env.*
-
-# Editors
-.vscode/
-.idea/
-
-# Dependencies
-.venv/
-venv/
-node_modules/
-
-# Build artifacts
-dist/
-build/
-target/
-
-# Coverage reports
-coverage/
-htmlcov/
-.coverage
-
-# Cache directories
-.mypy_cache/
-.pytest_cache/
+# Data cache files
+StrategyExamplesMoexAlgo_ru/data_cache/
 ```
