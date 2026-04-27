@@ -3,15 +3,17 @@
 __pycache__/
 *.o
 *.obj
+*.out
 *.so
 *.dll
 *.exe
 *.class
-*.out
+*.a
+*.lib
 
 # Dependencies
-.venv/
 venv/
+.venv/
 .env
 .env.local
 .env.*
@@ -22,50 +24,28 @@ venv/
 *.swp
 *.swo
 
-# Editors
-.vscode/
-.idea/
-
-# Coverage
+# Coverage reports
 .coverage
 coverage/
 htmlcov/
 
-# Python specific
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
 
-# MyPy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# PyTest
-.pytest_cache/
-
-# Jupyter
-.ipynb_checkpoints/
-
-# OS generated
+# System files
 .DS_Store
 Thumbs.db
+
+# Build directories
+dist/
+build/
+target/
+.mypy_cache/
+.pytest_cache/
+.gradle/
 
 # Compressed files
 *.zip
