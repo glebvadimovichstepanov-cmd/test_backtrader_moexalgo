@@ -25,9 +25,14 @@ INVEST_ACCOUNT_ID = os.getenv('INVEST_ACCOUNT_ID', None)
 
 from Config import Config as ConfigMOEX  # для авторизации на Московской Бирже
 
+# Импортируем утилиты для работы с инструментами
+from tinkoff_utils import InstrumentCache
+
 
 # Глобальный токен для работы с Tinkoff API
 _tinkoff_token = None
+# Глобальный кэш инструментов
+_instrument_cache = None
 
 def get_tinkoff_token():
     """Получить токен Tinkoff API"""
@@ -35,6 +40,14 @@ def get_tinkoff_token():
     if _tinkoff_token is None:
         _tinkoff_token = INVEST_TOKEN
     return _tinkoff_token
+
+
+def get_instrument_cache():
+    """Получить кэш инструментов (создает при первом вызове)"""
+    global _instrument_cache
+    if _instrument_cache is None:
+        _instrument_cache = InstrumentCache(INVEST_TOKEN)
+    return _instrument_cache
 
 def get_account_id(token):
     """Получить ID активного счета"""
@@ -103,6 +116,9 @@ def print_positions_info(token, account_id):
         account_id: ID счета
     """
     try:
+        # Получаем кэш инструментов для быстрого поиска по UID/FIGI
+        cache = get_instrument_cache()
+        
         with Client(token) as client:
             # Получаем портфель
             portfolio_response = client.operations.get_portfolio(account_id=account_id)
@@ -120,9 +136,8 @@ def print_positions_info(token, account_id):
             
             for pos in portfolio_response.positions:
                 # Получаем информацию об инструменте
-                instrument_id = getattr(pos, 'instrument_uid', None)
-                if not instrument_id:
-                    instrument_id = getattr(pos, 'figi', 'N/A')
+                instrument_uid = getattr(pos, 'instrument_uid', None)
+                figi_from_pos = getattr(pos, 'figi', None)
                 
                 quantity = getattr(pos, 'quantity', None)
                 if quantity and hasattr(quantity, 'units'):
@@ -146,24 +161,36 @@ def print_positions_info(token, account_id):
                 position_value = lots * price_value
                 total_value += position_value
                 
-                # Пытаемся получить тикер через instruments.find_instrument по FIGI/UID
+                # Пытаемся получить тикер и FIGI через кэш инструментов
                 ticker = 'N/A'
                 figi = 'N/A'
-                try:
-                    # Пробуем найти инструмент по UID
-                    if instrument_id and not instrument_id.startswith('BBG'):
-                        # Это UID, пробуем найти через get_account_instruments или оставляем как есть
-                        pass
-                    elif instrument_id and instrument_id.startswith('BBG'):
-                        figi = instrument_id
-                        # Можем попробовать найти тикер через find_instrument
-                        inst_response = client.instruments.find_instrument(query=instrument_id)
-                        if hasattr(inst_response, 'instruments') and inst_response.instruments:
-                            inst = inst_response.instruments[0]
-                            ticker = getattr(inst, 'ticker', 'N/A')
-                            figi = getattr(inst, 'figi', instrument_id)
-                except:
-                    pass
+                
+                # Сначала пробуем найти по UID (это наиболее надежный идентификатор в новом API)
+                if instrument_uid:
+                    inst_info = cache.get_by_uid(instrument_uid)
+                    if inst_info:
+                        ticker = inst_info.get('ticker', 'N/A')
+                        figi = inst_info.get('figi', 'N/A')
+                
+                # Если не нашли по UID, пробуем по FIGI из позиции
+                if ticker == 'N/A' and figi_from_pos:
+                    inst_info = cache.get_by_figi(figi_from_pos)
+                    if inst_info:
+                        ticker = inst_info.get('ticker', 'N/A')
+                        figi = figi_from_pos
+                
+                # Если все еще не нашли, пробуем старый метод через find_instrument
+                if ticker == 'N/A':
+                    try:
+                        search_id = instrument_uid if instrument_uid else figi_from_pos
+                        if search_id:
+                            inst_response = client.instruments.find_instrument(query=search_id)
+                            if hasattr(inst_response, 'instruments') and inst_response.instruments:
+                                inst = inst_response.instruments[0]
+                                ticker = getattr(inst, 'ticker', 'N/A')
+                                figi = getattr(inst, 'figi', search_id)
+                    except Exception as e:
+                        logger.debug(f"Не удалось найти инструмент через find_instrument: {e}")
                 
                 print(f"Тикер: {ticker:10} | FIGI: {figi:20} | Лотов: {lots:12.2f} | Цена: {price_value:12.4f} {currency:4} | Стоимость: {position_value:12.2f} {currency}")
             
@@ -173,6 +200,8 @@ def print_positions_info(token, account_id):
             
     except Exception as e:
         print(f"Ошибка при получении информации о позициях: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 def execute_with_client(func):
