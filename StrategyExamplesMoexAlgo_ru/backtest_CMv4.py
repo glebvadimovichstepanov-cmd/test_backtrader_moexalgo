@@ -274,6 +274,7 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
                 data_points = []
                 if hasattr(data, 'all_history_data') and data.all_history_data:
                     for kline in data.all_history_data:
+                        # Проверяем, что данные в формате списка/кортежа
                         if isinstance(kline, (list, tuple)) and len(kline) >= 6:
                             # Обрабатываем как Timestamp, так и строковые значения времени
                             timestamp_val = kline[0]
@@ -294,6 +295,9 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
                                 'volume': kline[5]
                             }
                             data_points.append(point)
+                        # Если данные уже в формате словаря (загружены из кэша ранее)
+                        elif isinstance(kline, dict) and 'datetime' in kline:
+                            data_points.append(kline)
                 
                 has_data = len(data_points) > 0
                 
@@ -358,8 +362,10 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
     
     # Создаем объект data из data_points
     # Важно: явно указываем имена колонок для PandasData, чтобы избежать ошибок с типами данных
+    # Также устанавливаем name для корректной работы self.dnames в стратегии
     df = pd.DataFrame(data_points)
     data = bt.feeds.PandasData(dataname=df, 
+                                name=symbol,  # Важно: устанавливаем имя для dnames
                                 datetime='datetime',
                                 open='open',
                                 high='high',

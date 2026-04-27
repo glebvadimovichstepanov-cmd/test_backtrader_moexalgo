@@ -1,4 +1,15 @@
 ```
-# Data cache files
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pickle
+*.pkl
+
+# Data cache
 StrategyExamplesMoexAlgo_ru/data_cache/
+
+# Compiled Python
+StrategyExamplesMoexAlgo_ru/__pycache__/
 ```
