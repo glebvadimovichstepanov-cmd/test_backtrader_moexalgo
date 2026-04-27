@@ -214,34 +214,91 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
             print(f"⚠ Ошибка доступа к super_candles: {e} - переключаемся на DF режим")
             super_candles_available = False
             use_super_candles_mode = False
+            # data_points может быть частично заполнен до ошибки - сохраняем для DF режима
         else:
             raise
     
     # ============================================================
-    # ШАГ 2: Если super_candles доступны - сохраняем и используем их
+    # ШАГ 2: Определяем режим работы и обрабатываем данные
     # ============================================================
-    if use_super_candles_mode and data_points:
+    if use_super_candles_mode and data_points and len(data_points) > 0:
+        # Режим super_candles активен - сохраняем и используем
         cache_key = get_cache_key(symbol, date_start, date_end, timeframe, compression, 'tradestats')
         if use_cache:
             save_to_cache(cache_key, data_points)
             print(f"✓ Данные super_candles сохранены в кэш: {cache_key}")
         
-        # Переходим к созданию data объекта (после этой секции)
-        
-    # ============================================================
-    # ШАГ 3: Если super_candles недоступны - работаем в DF режиме с кэшем
-    # ============================================================
     else:
+        # Режим DF - super_candles недоступны
         use_super_candles_mode = False
         cache_key = get_cache_key(symbol, date_start, date_end, timeframe, compression, None)
         
-        # Пытаемся загрузить из кэша для DF режима
-        data_points = None
-        if use_cache and not force_update:
-            loaded_data = load_from_cache(cache_key)
-            if loaded_data is not None:
-                if isinstance(loaded_data, dict) and loaded_data.get('empty'):
-                    print(f"⚠ Выходной/праздничный день (пустой кэш DF) для {symbol} за {date_start.date()}")
+        # Проверяем, есть ли данные из первого запроса
+        if data_points and len(data_points) > 0:
+            print(f"✓ Используем данные из первого запроса (DF режим): {len(data_points)} свечей")
+            if use_cache:
+                save_to_cache(cache_key, data_points)
+                print(f"✓ Данные сохранены в кэш (DF режим): {cache_key}")
+        else:
+            # Данных нет - пробуем кэш или новый запрос
+            data_points = None
+            
+            if use_cache and not force_update:
+                loaded_data = load_from_cache(cache_key)
+                if loaded_data is not None:
+                    if isinstance(loaded_data, dict) and loaded_data.get('empty'):
+                        print(f"⚠ Выходной/праздничный день (пустой кэш DF) для {symbol} за {date_start.date()}")
+                        return {
+                            'date': date_start.date(),
+                            'start_cash': 100000.0,
+                            'end_cash': 100000.0,
+                            'pnl': 0.0,
+                            'pnl_percent': 0.0,
+                            'trades_count': 0,
+                            'strategy': None,
+                            'error': 'no_data',
+                            'cached': True,
+                            'skip_day': True
+                        }
+                    data_points = loaded_data
+                    print(f"✓ Данные загружены из кэша (DF режим): {cache_key}")
+            
+            if data_points is None:
+                print(f"📡 Загрузка данных (DF режим) для {symbol} ({date_start.date()})...")
+                store = MoexAlgoStore()
+                
+                getdata_kwargs = {
+                    'dataname': symbol,
+                    'fromdate': date_start,
+                    'todate': date_end,
+                    'timeframe': timeframe,
+                    'compression': compression,
+                    'live_bars': False
+                }
+                
+                data = store.getdata(**getdata_kwargs)
+                
+                data_points = []
+                has_data = False
+                
+                for d in data:
+                    if len(d.open) == 0 or len(d.high) == 0 or len(d.low) == 0 or len(d.close) == 0:
+                        continue
+                    has_data = True
+                    point = {
+                        'datetime': d.datetime[0],
+                        'open': d.open[0],
+                        'high': d.high[0],
+                        'low': d.low[0],
+                        'close': d.close[0],
+                        'volume': d.volume[0]
+                    }
+                    data_points.append(point)
+                
+                if not has_data:
+                    print(f"⚠ Нет данных для {symbol} за {date_start.date()}")
+                    if use_cache:
+                        save_to_cache(cache_key, {'empty': True})
                     return {
                         'date': date_start.date(),
                         'start_cash': 100000.0,
@@ -251,65 +308,12 @@ def run_daily_backtest(date_start, date_end, symbol='SNGS', use_cache=True, forc
                         'trades_count': 0,
                         'strategy': None,
                         'error': 'no_data',
-                        'cached': True,
                         'skip_day': True
                     }
-                data_points = loaded_data
-                print(f"✓ Данные загружены из кэша (DF режим): {cache_key}")
-        
-        # Если нет в кэше - запрашиваем MOEX без super_candles
-        if data_points is None:
-            print(f"📡 Загрузка данных (DF режим) для {symbol} ({date_start.date()})...")
-            store = MoexAlgoStore()
-            
-            getdata_kwargs = {
-                'dataname': symbol,
-                'fromdate': date_start,
-                'todate': date_end,
-                'timeframe': timeframe,
-                'compression': compression,
-                'live_bars': False
-            }
-            
-            data = store.getdata(**getdata_kwargs)
-            
-            data_points = []
-            has_data = False
-            
-            for d in data:
-                if len(d.open) == 0 or len(d.high) == 0 or len(d.low) == 0 or len(d.close) == 0:
-                    continue
-                has_data = True
-                point = {
-                    'datetime': d.datetime[0],
-                    'open': d.open[0],
-                    'high': d.high[0],
-                    'low': d.low[0],
-                    'close': d.close[0],
-                    'volume': d.volume[0]
-                }
-                data_points.append(point)
-            
-            if not has_data:
-                print(f"⚠ Нет данных для {symbol} за {date_start.date()}")
+                
                 if use_cache:
-                    save_to_cache(cache_key, {'empty': True})
-                return {
-                    'date': date_start.date(),
-                    'start_cash': 100000.0,
-                    'end_cash': 100000.0,
-                    'pnl': 0.0,
-                    'pnl_percent': 0.0,
-                    'trades_count': 0,
-                    'strategy': None,
-                    'error': 'no_data',
-                    'skip_day': True
-                }
-            
-            # Сохраняем в кэш для DF режима
-            if use_cache:
-                save_to_cache(cache_key, data_points)
-                print(f"✓ Данные сохранены в кэш (DF режим): {cache_key}")
+                    save_to_cache(cache_key, data_points)
+                    print(f"✓ Данные сохранены в кэш (DF режим): {cache_key}")
     
     # Проверяем, что data_points существует и это список
     import pandas as pd
