@@ -1,1 +1,5 @@
-Nothing needs to be added to the .gitignore file since only a Python source file (.py) was modified and no build artifacts, dependencies, or temporary files were included in the changes.
+```
+# Logs and temp files
+*.log
+run_output.log
+```
