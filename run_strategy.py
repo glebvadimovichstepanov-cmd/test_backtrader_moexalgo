@@ -243,22 +243,26 @@ def generate_orders(df, ind, htf_trend, params):
                 cooldown = 1
 
     # Конвертируем в формат vbt 1.0.0:
-    # direction: 0 = нет ордера, 1 = LongOnly (покупка), 2 = ShortOnly (продажа)
-    # Для long entry используем 1, для long exit используем 2 с size=np.inf
-    # Для short entry используем 2, для short exit используем 2 с size=np.inf (закрывает шорт)
+    # direction: 2 = Both (может быть и покупкой, и продажей - автоматически определяет по позиции)
+    # size: NaN = нет ордера, >0 = размер ордера в % от капитала
+    final_directions = np.full(n, 2, dtype=np.int32)  # По умолчанию 2 (но size=NaN будет игнорироваться)
+    final_sizes = np.full(n, np.nan, dtype=np.float64)
+    
     for i in range(n):
         if long_entries[i]:
-            directions[i] = 1  # Buy to open long
+            final_directions[i] = 2   # Both - Buy to open long
+            final_sizes[i] = sizes[i]
         elif short_entries[i]:
-            directions[i] = 2  # Sell to open short
+            final_directions[i] = 2   # Both - Sell to open short
+            final_sizes[i] = sizes[i]
         elif long_exits[i]:
-            directions[i] = 2  # Sell to close long (size=np.inf закроет всё)
-            sizes[i] = np.inf
+            final_directions[i] = 2   # Both - Sell to close long
+            final_sizes[i] = 1.0      # Закрываем 100% позиции
         elif short_exits[i]:
-            directions[i] = 2  # Sell to close short (size=np.inf закроет всё)
-            sizes[i] = np.inf
+            final_directions[i] = 2   # Both - Buy to close short
+            final_sizes[i] = 1.0      # Закрываем 100% позиции
 
-    return directions, sizes
+    return final_directions, final_sizes
 
 
 print("\n⚙️ Расчёт индикаторов и тренда старшего ТФ...")
@@ -289,7 +293,7 @@ for vals in product(*param_grid.values()):
 
         active_mask = ~np.isnan(sizes)
         if np.any(active_mask):
-            assert np.all(np.isin(directions[active_mask], [0, 1, 2])), "direction содержит недопустимые значения"
+            assert np.all(np.isin(directions[active_mask], [0, 1, 2])), "direction содержит недопустимые значения (только 0, 1 или 2)"
             assert np.all(sizes[active_mask] > 0), "Активные размеры ордеров должны быть > 0"
 
         dirs_arr = np.ascontiguousarray(directions)
@@ -306,19 +310,20 @@ for vals in product(*param_grid.values()):
             log=False,
             allow_partial=True,
             cash_sharing=False,
-            lock_cash=False
+            lock_cash=False,
+            freq='5min'  # Указываем частоту данных для правильного расчета метрик
         )
 
-        t = int(pf.trades.count())
-        sr = float(pf.sharpe_ratio)
-        dd = float(pf.max_drawdown)
-        ret = float(pf.total_return)
-        wr = float(pf.trades.win_rate()) * 100 if t > 0 else 0
+        t = pf.trades.count()
+        sr = pf.sharpe_ratio()
+        dd = pf.max_drawdown()
+        ret = pf.total_return()
+        wr = pf.trades.win_rate() * 100 if t > 0 else 0
 
         if t < MIN_TRADES:
             continue
 
-        if pd.isna(sr) or pd.isinf(sr) or dd > 0.30:
+        if np.isnan(sr) or np.isinf(sr) or dd > 0.30:
             continue
 
         if sr > best_sharpe:
