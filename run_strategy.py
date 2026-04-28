@@ -242,18 +242,21 @@ def generate_orders(df, ind, htf_trend, params):
                 pos = 0
                 cooldown = 1
 
-    # Конвертируем в формат vbt: entries используют direction 1/2, exits используют size=np.inf
+    # Конвертируем в формат vbt 1.0.0:
+    # direction: 0 = нет ордера, 1 = LongOnly (покупка), 2 = ShortOnly (продажа)
+    # Для long entry используем 1, для long exit используем 2 с size=np.inf
+    # Для short entry используем 2, для short exit используем 2 с size=np.inf (закрывает шорт)
     for i in range(n):
         if long_entries[i]:
-            directions[i] = 1
+            directions[i] = 1  # Buy to open long
         elif short_entries[i]:
-            directions[i] = 2
+            directions[i] = 2  # Sell to open short
         elif long_exits[i]:
-            directions[i] = 2  # Закрываем лонг шортом
-            sizes[i] = np.inf  # Закрыть всю позицию
+            directions[i] = 2  # Sell to close long (size=np.inf закроет всё)
+            sizes[i] = np.inf
         elif short_exits[i]:
-            directions[i] = 1  # Закрываем шорт лонгом
-            sizes[i] = np.inf  # Закрыть всю позицию
+            directions[i] = 2  # Sell to close short (size=np.inf закроет всё)
+            sizes[i] = np.inf
 
     return directions, sizes
 
