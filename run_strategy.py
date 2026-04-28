@@ -130,56 +130,60 @@ def calc_indicators(df, tf_minutes=5):
     }).ffill().bfill()
 
 
-def get_htf_trend(df, tf_mult=12):
-    df_htf = df.resample(f'{tf_mult}min').agg({'Close': 'last'}).dropna()
+def get_htf_trend(df):
+    """Рассчитывает тренд на дневном таймфрейме (1D)
+    
+    Простая логика: цена выше SMA20 = бычий, ниже = медвежий
+    """
+    # Ресемплинг в 1 день
+    df_htf = df.resample('1D').agg({'Close': 'last'}).dropna()
     c = df_htf['Close']
-    ema50 = ema(c, 50)
-    ema200 = ema(c, 200)
-    di_diff = ema(c, 14) - ema(c, 28)
+    
+    # Простая скользящая средняя
+    sma20 = c.rolling(20).mean()
+    sma50 = c.rolling(50).mean()
 
     htf = pd.Series(0, index=df_htf.index)
-    htf[(ema50 > ema200) & (di_diff > 0)] = 1
-    htf[(ema50 < ema200) & (di_diff < 0)] = -1
+    # Бычий тренд: цена выше SMA20 И SMA20 > SMA50
+    htf[(c > sma20) & (sma20 > sma50)] = 1
+    # Медвежий тренд: цена ниже SMA20 И SMA20 < SMA50
+    htf[(c < sma20) & (sma20 < sma50)] = -1
+    
+    # Возвращаем к исходному индексу (5 мин), заполняя пропуски последним известным значением
     return htf.reindex(df.index, method='ffill').fillna(0)
 
 
 def generate_orders(df, ind, htf_trend, params):
     """Генерирует ордера для vectorbt 1.0.0
     
-    direction: 0=nothing, 1=long entry/add, 2=short entry/add
-    Для закрытия используем size=np.inf с правильным направлением
+    direction: 2 = Both (автоматически определяет покупку/продажу по позиции)
+    size: NaN = нет ордера, >0 = размер ордера в % от капитала
+    
+    Стратегия: Mean Reversion - покупка на просадках, продажа на росте
+    Работает независимо от тренда (торговля в диапазоне)
+    
+    ВАЖНО: Проверка SL/TP происходит по High/Low бара, а не по Close
     """
     c = df['Close']
+    h = df['High']
+    l = df['Low']
     p = params
     n = len(c)
 
-    trend_bull = (htf_trend == 1) & (c > ind['ema50'])
-    trend_bear = (htf_trend == -1) & (c < ind['ema50'])
-
-    mom_long = (ind['rsi'] < 40) & (ind['macd_hist'] > ind['macd_hist'].shift(1)) & (ind['stoch_k'] < 30)
-    mom_short = (ind['rsi'] > 60) & (ind['macd_hist'] < ind['macd_hist'].shift(1)) & (ind['stoch_k'] > 70)
-
-    vol_long = c <= ind['bb_lower']
-    vol_short = c >= ind['bb_upper']
-
-    flow_long = (ind['cmf'] > -0.15) & (ind['vol_ratio'] > p['vol_ratio_thresh'])
-    flow_short = (ind['cmf'] < 0.15) & (ind['vol_ratio'] > p['vol_ratio_thresh'])
-
-    score_long = trend_bull.astype(int) + mom_long.astype(int) + vol_long.astype(int) + flow_long.astype(int)
-    score_short = trend_bear.astype(int) + mom_short.astype(int) + vol_short.astype(int) + flow_short.astype(int)
-
-    entry_long = score_long >= p['confluence_thresh']
-    entry_short = score_short >= p['confluence_thresh']
+    # ТОРГОВЛЯ В ДИАПАЗОНЕ - игнорируем тренд
+    # Покупка у нижней границы Bollinger ИЛИ при низком RSI
+    entry_long = (c <= ind['bb_lower']) | (ind['rsi'] < 35)
+    
+    # Продажа у верхней границы Bollinger ИЛИ при высоком RSI
+    entry_short = (c >= ind['bb_upper']) | (ind['rsi'] > 65)
 
     # Векторные сигналы для vbt
-    directions = np.zeros(n, dtype=np.int32)
-    sizes = np.full(n, np.nan, dtype=np.float64)
-    
-    # Отдельные массивы для entries и exits
     long_entries = np.zeros(n, dtype=bool)
     short_entries = np.zeros(n, dtype=bool)
     long_exits = np.zeros(n, dtype=bool)
     short_exits = np.zeros(n, dtype=bool)
+    
+    sizes = np.full(n, np.nan, dtype=np.float64)
 
     pos = 0
     avg_done = False
@@ -193,90 +197,118 @@ def generate_orders(df, ind, htf_trend, params):
             cooldown -= 1
             continue
 
-        px = c.iloc[i]
+        px_close = c.iloc[i]
+        px_low = l.iloc[i]
+        px_high = h.iloc[i]
         atr_i = ind['atr'].iloc[i]
+        
+        # Защита от нулевого ATR
+        if pd.isna(atr_i) or atr_i <= 0:
+            atr_i = (ind['atr'].iloc[max(0, i-10):i+1].median())
+            if pd.isna(atr_i) or atr_i <= 0:
+                atr_i = px_close * 0.02
 
         if pos == 0:
+            # ВХОД В ПОЗИЦИЮ (по цене закрытия)
             if entry_long.iloc[i]:
                 pos = 1
-                entry_price = px
-                sl_price = px - p['sl_atr_mult'] * atr_i
-                tp_price = px + p['tp_atr_mult'] * atr_i
+                entry_price = px_close
+                sl_price = px_close - p['sl_atr_mult'] * atr_i
+                tp_price = px_close + p['tp_atr_mult'] * atr_i
                 avg_done = False
                 long_entries[i] = True
                 sizes[i] = 1.0
             elif entry_short.iloc[i]:
                 pos = -1
-                entry_price = px
-                sl_price = px + p['sl_atr_mult'] * atr_i
-                tp_price = px - p['tp_atr_mult'] * atr_i
+                entry_price = px_close
+                sl_price = px_close + p['sl_atr_mult'] * atr_i
+                tp_price = px_close - p['tp_atr_mult'] * atr_i
                 avg_done = False
                 short_entries[i] = True
                 sizes[i] = 1.0
 
         elif pos == 1:
-            if not avg_done and px <= entry_price - p['avg_atr_mult'] * atr_i:
-                entry_price = (entry_price + px * p['avg_size']) / (1 + p['avg_size'])
+            # ЛОНГ позиция
+            # ПРОВЕРКА SL/TP ПО LOW/HIGH БАРА!
+            sl_hit = px_low <= sl_price
+            tp_hit = px_high >= tp_price
+            
+            # Усреднение (только если еще не было и SL/TP не задеты)
+            if not avg_done and not sl_hit and not tp_hit and px_close <= entry_price - p['avg_atr_mult'] * atr_i:
+                entry_price = (entry_price + px_close * p['avg_size']) / (1 + p['avg_size'])
                 sl_price = entry_price - p['sl_atr_mult'] * atr_i
                 tp_price = entry_price + p['tp_atr_mult'] * atr_i
                 avg_done = True
                 long_entries[i] = True
                 sizes[i] = p['avg_size']
-            elif px <= sl_price or px >= tp_price or score_long.iloc[i] < 2:
+            # ВЫХОД из лонга: SL или TP (приоритет SL если оба задеты)
+            elif sl_hit or tp_hit:
                 long_exits[i] = True
                 sizes[i] = 1.0
                 pos = 0
-                cooldown = 1
+                cooldown = 0
 
         elif pos == -1:
-            if not avg_done and px >= entry_price + p['avg_atr_mult'] * atr_i:
-                entry_price = (entry_price + px * p['avg_size']) / (1 + p['avg_size'])
+            # ШОРТ позиция
+            # ПРОВЕРКА SL/TP ПО HIGH/LOW БАРА!
+            sl_hit = px_high >= sl_price
+            tp_hit = px_low <= tp_price
+            
+            # Усреднение (только если еще не было и SL/TP не задеты)
+            if not avg_done and not sl_hit and not tp_hit and px_close >= entry_price + p['avg_atr_mult'] * atr_i:
+                entry_price = (entry_price + px_close * p['avg_size']) / (1 + p['avg_size'])
                 sl_price = entry_price + p['sl_atr_mult'] * atr_i
                 tp_price = entry_price - p['tp_atr_mult'] * atr_i
                 avg_done = True
                 short_entries[i] = True
                 sizes[i] = p['avg_size']
-            elif px >= sl_price or px <= tp_price or score_short.iloc[i] < 2:
+            # ВЫХОД из шорта: SL или TP (приоритет SL если оба задеты)
+            elif sl_hit or tp_hit:
                 short_exits[i] = True
                 sizes[i] = 1.0
                 pos = 0
-                cooldown = 1
+                cooldown = 0
 
-    # Конвертируем в формат vbt 1.0.0:
-    # direction: 2 = Both (может быть и покупкой, и продажей - автоматически определяет по позиции)
-    # size: NaN = нет ордера, >0 = размер ордера в % от капитала
-    final_directions = np.full(n, 2, dtype=np.int32)  # По умолчанию 2 (но size=NaN будет игнорироваться)
+    # Конвертируем в формат vbt 1.0.0
+    final_directions = np.full(n, 2, dtype=np.int32)
     final_sizes = np.full(n, np.nan, dtype=np.float64)
     
     for i in range(n):
         if long_entries[i]:
-            final_directions[i] = 2   # Both - Buy to open long
+            final_directions[i] = 2
             final_sizes[i] = sizes[i]
         elif short_entries[i]:
-            final_directions[i] = 2   # Both - Sell to open short
+            final_directions[i] = 2
             final_sizes[i] = sizes[i]
         elif long_exits[i]:
-            final_directions[i] = 2   # Both - Sell to close long
-            final_sizes[i] = 1.0      # Закрываем 100% позиции
+            final_directions[i] = 2
+            final_sizes[i] = 1.0
         elif short_exits[i]:
-            final_directions[i] = 2   # Both - Buy to close short
-            final_sizes[i] = 1.0      # Закрываем 100% позиции
+            final_directions[i] = 2
+            final_sizes[i] = 1.0
 
     return final_directions, final_sizes
 
 
-print("\n⚙️ Расчёт индикаторов и тренда старшего ТФ...")
+print("\n⚙️ Расчёт индикаторов и тренда старшего ТФ (1D)...")
 ind = calc_indicators(df, tf_minutes=5)
-htf_trend = get_htf_trend(df, tf_mult=12)
+htf_trend = get_htf_trend(df)  # Теперь используется дневной тренд
 
+# Отладка: проверка распределения тренда
+print(f"Тренд: {(htf_trend == 1).sum()} бычьих, {(htf_trend == -1).sum()} медвежьих, {(htf_trend == 0).sum()} нейтральных баров")
+
+# Агрессивная сетка параметров для частой торговли
 param_grid = {
-    'confluence_thresh': [2, 3],
-    'vol_ratio_thresh': [1.0, 1.2],
-    'sl_atr_mult': [1.0, 1.5],
-    'tp_atr_mult': [2.0, 2.5],
-    'avg_atr_mult': [1.0, 1.5],
-    'avg_size': [0.5]
+    'confluence_thresh': [1],              # Минимальный порог (фактически не используется в новой логике)
+    'vol_ratio_thresh': [1.0],             # Не используется в новой логике
+    'sl_atr_mult': [1.5, 2.0, 2.5],        # Стоп-лосс в ATR
+    'tp_atr_mult': [2.0, 3.0, 4.0],        # Тейк-профит в ATR
+    'avg_atr_mult': [1.5, 2.0],            # Усреднение по ATR
+    'avg_size': [0.5]                      # Размер усреднения
 }
+
+total_configs = len(list(product(*param_grid.values())))
+print(f"📊 Всего конфигураций для проверки: {total_configs}\n")
 
 best_sharpe = -999
 best_params = None
