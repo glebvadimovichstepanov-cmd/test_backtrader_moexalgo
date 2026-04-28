@@ -1,1 +1,14 @@
-Nothing should be ignored in this case, as the modified files are source code (.py) and data (.csv) files without any build artifacts, dependencies, or temporary files present in the changes.
+```
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+
+# Environment
+.env
+.env.local
+*.env.*
+
+# Original rules preserved
+*.log
+```
