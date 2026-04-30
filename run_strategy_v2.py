@@ -338,8 +338,8 @@ ind_dict = {}
 for tf, df in data_dict.items():
     ind_dict[tf] = calculate_indicators(df, tf)
 
-# Сетка параметров (ИСПРАВЛЕННЫЙ СИНТАКСИС)
-param_grid = {
+# Базовая сетка параметров для начального поиска
+param_grid_base = {
     'vol_1d_mult': [0.5, 0.8],
     'vol_15_mult': [0.5, 0.8],
     'vol_1m_mult': [1.0, 1.5, 2.0],
@@ -354,34 +354,18 @@ param_grid = {
     'doji_thresh': [0.1]
 }
 
-best_sharpe = -999
-best_params = None
-error_count = 0
-cfg_count = 0
-
-print("🔄 Запуск оптимизации...")
-price_arr = np.ascontiguousarray(ind_dict['1T']['close'].values.astype(np.float64))
-
-# Для отладки можно включить статистику по фильтрам (первый прогон или лучший конфиг)
-DEBUG_FILTERS = True  # Включить вывод статистики фильтров
-
-for vals in product(*param_grid.values()):
-    p = dict(zip(param_grid.keys(), vals))
-    cfg_count += 1
-
+def evaluate_params(p, data_dict, ind_dict, price_arr, cfg_count_ref):
+    """Вычисляет метрики для заданных параметров"""
     try:
-        # Показываем детальную статистику фильтров для первых нескольких конфигов
-        show_stats = DEBUG_FILTERS and cfg_count <= 5
-        dirs, sizes = generate_orders_multi_tf(data_dict, ind_dict, p, debug_stats=show_stats)
-
+        dirs, sizes = generate_orders_multi_tf(data_dict, ind_dict, p, debug_stats=False)
+        
         active_mask = ~np.isnan(sizes)
         if active_mask.sum() == 0:
-            if DEBUG: print(f"⏭️ Конфиг #{cfg_count}: Нет сделок")
-            continue
-
+            return None, 0
+        
         dirs_arr = np.ascontiguousarray(dirs)
         sizes_arr = np.ascontiguousarray(sizes)
-
+        
         pf = vbt.Portfolio.from_orders(
             close=price_arr,
             direction=dirs_arr,
@@ -393,60 +377,331 @@ for vals in product(*param_grid.values()):
             cash_sharing=False,
             lock_cash=False
         )
-
+        
         t = int(pf.trades.count())
         if t < MIN_TRADES:
-            continue
-
+            return None, 0
+        
         sr = float(pf.sharpe_ratio())
         dd = float(pf.max_drawdown())
         ret = float(pf.total_return())
         wr = float(pf.trades.win_rate()) * 100
-
+        
         if pd.isna(sr) or pd.isinf(sr) or dd > 0.5:
+            return None, 0
+        
+        return {
+            'sharpe': sr,
+            'return': ret,
+            'dd': dd,
+            'trades': t,
+            'win_rate': wr,
+            'params': p.copy()
+        }, t
+        
+    except Exception as e:
+        return None, 0
+
+
+def random_search_optimization(data_dict, ind_dict, price_arr, param_ranges, n_iterations=100):
+    """Случайный поиск оптимальных параметров"""
+    best_result = None
+    best_sharpe = -999
+    
+    print(f"\n🔎 Случайный поиск ({n_iterations} итераций)...")
+    
+    for i in range(n_iterations):
+        # Генерируем случайные параметры в заданных диапазонах
+        p = {
+            'vol_1d_mult': np.random.uniform(param_ranges['vol_1d_mult'][0], param_ranges['vol_1d_mult'][1]),
+            'vol_15_mult': np.random.uniform(param_ranges['vol_15_mult'][0], param_ranges['vol_15_mult'][1]),
+            'vol_1m_mult': np.random.uniform(param_ranges['vol_1m_mult'][0], param_ranges['vol_1m_mult'][1]),
+            'rsi_1d_thresh': np.random.uniform(param_ranges['rsi_1d_thresh'][0], param_ranges['rsi_1d_thresh'][1]),
+            'rsi_15_thresh': np.random.uniform(param_ranges['rsi_15_thresh'][0], param_ranges['rsi_15_thresh'][1]),
+            'rsi_1m_thresh': np.random.uniform(param_ranges['rsi_1m_thresh'][0], param_ranges['rsi_1m_thresh'][1]),
+            'sl_atr_mult': np.random.uniform(param_ranges['sl_atr_mult'][0], param_ranges['sl_atr_mult'][1]),
+            'tp_atr_mult': np.random.uniform(param_ranges['tp_atr_mult'][0], param_ranges['tp_atr_mult'][1]),
+            'doji_thresh': np.random.uniform(param_ranges['doji_thresh'][0], param_ranges['doji_thresh'][1])
+        }
+        
+        result, trades = evaluate_params(p, data_dict, ind_dict, price_arr, i)
+        
+        if result is not None and result['sharpe'] > best_sharpe:
+            best_sharpe = result['sharpe']
+            best_result = result
+            if i % 20 == 0:
+                print(f"  Итерация {i}: Sharpe={result['sharpe']:.2f}, Trades={result['trades']}")
+    
+    return best_result
+
+
+def refine_optimization(data_dict, ind_dict, price_arr, best_params, param_ranges, n_iterations=50):
+    """Уточняющая оптимизация вокруг лучших параметров"""
+    best_result = {'sharpe': -999, 'params': best_params}
+    sharpe_baseline = best_result['sharpe']
+    
+    # Вычисляем базовый Sharpe для лучших параметров
+    base_result, _ = evaluate_params(best_params, data_dict, ind_dict, price_arr, 0)
+    if base_result:
+        best_result = base_result
+        sharpe_baseline = base_result['sharpe']
+    
+    print(f"\n🔬 Уточняющая оптимизация вокруг лучших параметров ({n_iterations} итераций)...")
+    print(f"   Базовый Sharpe: {sharpe_baseline:.2f}")
+    
+    # Сужаем диапазоны вокруг лучших значений (10% от диапазона)
+    narrow_ranges = {}
+    for key in best_params.keys():
+        center = best_params[key]
+        range_size = param_ranges[key][1] - param_ranges[key][0]
+        narrow_range = range_size * 0.1
+        narrow_ranges[key] = [
+            max(param_ranges[key][0], center - narrow_range),
+            min(param_ranges[key][1], center + narrow_range)
+        ]
+    
+    for i in range(n_iterations):
+        p = {
+            'vol_1d_mult': np.random.uniform(narrow_ranges['vol_1d_mult'][0], narrow_ranges['vol_1d_mult'][1]),
+            'vol_15_mult': np.random.uniform(narrow_ranges['vol_15_mult'][0], narrow_ranges['vol_15_mult'][1]),
+            'vol_1m_mult': np.random.uniform(narrow_ranges['vol_1m_mult'][0], narrow_ranges['vol_1m_mult'][1]),
+            'rsi_1d_thresh': np.random.uniform(narrow_ranges['rsi_1d_thresh'][0], narrow_ranges['rsi_1d_thresh'][1]),
+            'rsi_15_thresh': np.random.uniform(narrow_ranges['rsi_15_thresh'][0], narrow_ranges['rsi_15_thresh'][1]),
+            'rsi_1m_thresh': np.random.uniform(narrow_ranges['rsi_1m_thresh'][0], narrow_ranges['rsi_1m_thresh'][1]),
+            'sl_atr_mult': np.random.uniform(narrow_ranges['sl_atr_mult'][0], narrow_ranges['sl_atr_mult'][1]),
+            'tp_atr_mult': np.random.uniform(narrow_ranges['tp_atr_mult'][0], narrow_ranges['tp_atr_mult'][1]),
+            'doji_thresh': np.random.uniform(narrow_ranges['doji_thresh'][0], narrow_ranges['doji_thresh'][1])
+        }
+        
+        result, trades = evaluate_params(p, data_dict, ind_dict, price_arr, i)
+        
+        if result is not None and result['sharpe'] > best_result['sharpe']:
+            improvement = result['sharpe'] - sharpe_baseline
+            best_result = result
+            print(f"  Итерация {i}: Sharpe={result['sharpe']:.2f} (+{improvement:.2f}), Trades={result['trades']}")
+    
+    return best_result
+
+
+def grid_search_optimization(data_dict, ind_dict, price_arr, param_grid, start_cfg=1, debug_filters=False):
+    """Полный перебор по сетке параметров"""
+    best_sharpe = -999
+    best_params = None
+    results = []
+    error_count = 0
+    cfg_count = start_cfg - 1
+    
+    DEBUG_FILTERS_FLAG = debug_filters
+    
+    for vals in product(*param_grid.values()):
+        p = dict(zip(param_grid.keys(), vals))
+        cfg_count += 1
+        
+        show_stats = DEBUG_FILTERS_FLAG and cfg_count <= 5
+        
+        result, trades = evaluate_params(p, data_dict, ind_dict, price_arr, cfg_count)
+        
+        if result is None:
+            if DEBUG and cfg_count <= 10:
+                print(f"⏭️ Конфиг #{cfg_count}: Нет сделок или не прошел фильтры")
             continue
-
-        if DEBUG:
-            print(f"✅ Конфиг #{cfg_count} | Сделок: {t} | SR: {sr:.2f} | Ret: {ret:.2%}")
-
-        if sr > best_sharpe:
-            best_sharpe = sr
+        
+        if DEBUG and cfg_count % 50 == 0:
+            print(f"✅ Конфиг #{cfg_count} | Сделок: {result['trades']} | SR: {result['sharpe']:.2f} | Ret: {result['return']:.2%}")
+        
+        if result['sharpe'] > best_sharpe:
+            best_sharpe = result['sharpe']
             best_params = p
+            
             # Показываем полную статистику фильтров для нового лидера
-            dirs_debug, sizes_debug = generate_orders_multi_tf(data_dict, ind_dict, p, debug_stats=True)
+            if debug_filters:
+                dirs_debug, sizes_debug = generate_orders_multi_tf(data_dict, ind_dict, p, debug_stats=True)
             
             results.append({
-                'Sharpe': round(sr, 2),
-                'Return': round(ret * 100, 2),
-                'DD': round(dd * 100, 2),
-                'Trades': t,
-                'WinRate': round(wr, 1),
-                'Params': p
+                'Sharpe': round(result['sharpe'], 2),
+                'Return': round(result['return'] * 100, 2),
+                'DD': round(result['dd'] * 100, 2),
+                'Trades': result['trades'],
+                'WinRate': round(result['win_rate'], 1),
+                'Params': p.copy()
             })
-            print(f"🏆 Новый лидер! Sharpe: {sr:.2f}")
+            print(f"🏆 Новый лидер! Sharpe: {result['sharpe']:.2f}, Trades: {result['trades']}")
+    
+    return best_params, best_sharpe, results, cfg_count
 
-    except Exception as e:
-        error_count += 1
-        print(f"❌ Ошибка #{cfg_count}: {e}")
-        if DEBUG: traceback.print_exc()
+
+# Определяем диапазоны параметров для автоматической оптимизации
+param_ranges = {
+    'vol_1d_mult': [0.3, 1.5],
+    'vol_15_mult': [0.3, 1.5],
+    'vol_1m_mult': [0.5, 3.0],
+    'rsi_1d_thresh': [20, 50],
+    'rsi_15_thresh': [20, 95],
+    'rsi_1m_thresh': [15, 50],
+    'sl_atr_mult': [1.0, 3.0],
+    'tp_atr_mult': [1.0, 3.0],
+    'doji_thresh': [0.05, 0.4]
+}
+
+best_sharpe_global = -999
+best_params_global = None
+all_results = []
+
+print("=" * 60)
+print("🚀 ЗАПУСК АВТОМАТИЧЕСКОГО ПОДБОРА ПАРАМЕТРОВ")
+print("=" * 60)
+
+# Этап 1: Грубый случайный поиск для исследования пространства
+print("\n📊 ЭТАП 1: Грубый случайный поиск (исследование пространства)")
+random_result = random_search_optimization(data_dict, ind_dict, price_arr, param_ranges, n_iterations=200)
+
+if random_result:
+    best_sharpe_global = random_result['sharpe']
+    best_params_global = random_result['params']
+    all_results.append(random_result)
+    print(f"\n✅ Лучший результат после случайного поиска:")
+    print(f"   Sharpe: {best_sharpe_global:.2f}")
+    print(f"   Параметры: {best_params_global}")
+else:
+    print("⚠️ Случайный поиск не дал результатов, используем базовую сетку")
+
+# Этап 2: Уточняющая оптимизация вокруг лучших найденных параметров
+if best_params_global:
+    print("\n📊 ЭТАП 2: Уточняющая оптимизация")
+    refined_result = refine_optimization(data_dict, ind_dict, price_arr, best_params_global, param_ranges, n_iterations=100)
+    
+    if refined_result['sharpe'] > best_sharpe_global:
+        best_sharpe_global = refined_result['sharpe']
+        best_params_global = refined_result['params']
+        all_results.append(refined_result)
+        print(f"\n✅ Улучшено после уточнения:")
+        print(f"   Sharpe: {best_sharpe_global:.2f}")
+        print(f"   Параметры: {best_params_global}")
+
+# Этап 3: Финальная тонкая настройка (еще более узкий диапазон)
+if best_params_global:
+    print("\n📊 ЭТАП 3: Финальная тонкая настройка")
+    # Еще больше сужаем диапазоны (5% от исходного)
+    fine_ranges = {}
+    for key in best_params_global.keys():
+        center = best_params_global[key]
+        range_size = param_ranges[key][1] - param_ranges[key][0]
+        fine_range = range_size * 0.05
+        fine_ranges[key] = [
+            max(param_ranges[key][0], center - fine_range),
+            min(param_ranges[key][1], center + fine_range)
+        ]
+    
+    fine_result = refine_optimization(data_dict, ind_dict, price_arr, best_params_global, fine_ranges, n_iterations=50)
+    
+    if fine_result['sharpe'] > best_sharpe_global:
+        best_sharpe_global = fine_result['sharpe']
+        best_params_global = fine_result['params']
+        all_results.append(fine_result)
+        print(f"\n✅ Улучшено после тонкой настройки:")
+        print(f"   Sharpe: {best_sharpe_global:.2f}")
+        print(f"   Параметры: {best_params_global}")
+
+# Этап 4: Проверка окрестностей лучших параметров с помощью grid search
+if best_params_global:
+    print("\n📊 ЭТАП 4: Локальный grid search вокруг лучших параметров")
+    
+    # Создаем узкую сетку вокруг лучших параметров
+    local_grid = {}
+    for key in best_params_global.keys():
+        center = best_params_global[key]
+        range_size = param_ranges[key][1] - param_ranges[key][0]
+        step = range_size * 0.15  # 15% шага
+        
+        values = [
+            max(param_ranges[key][0], round(center - step, 2)),
+            max(param_ranges[key][0], round(center, 2)),
+            min(param_ranges[key][1], round(center + step, 2))
+        ]
+        # Удаляем дубликаты
+        values = sorted(list(set(values)))
+        if len(values) < 2:
+            values = [center]
+        local_grid[key] = values
+    
+    print(f"   Локальная сетка: {local_grid}")
+    
+    grid_best_params, grid_best_sharpe, grid_results, total_cfgs = grid_search_optimization(
+        data_dict, ind_dict, price_arr, local_grid, start_cfg=1, debug_filters=True
+    )
+    
+    if grid_best_sharpe > best_sharpe_global:
+        best_sharpe_global = grid_best_sharpe
+        best_params_global = grid_best_params
+        all_results.extend(grid_results)
+        print(f"\n✅ Улучшено после локального grid search:")
+        print(f"   Sharpe: {best_sharpe_global:.2f}")
+        print(f"   Параметры: {best_params_global}")
+    else:
+        all_results.extend(grid_results)
+
+# Считаем базовую сетку для сравнения (опционально)
+print("\n📊 ЭТАП 5: Сравнение с базовой сеткой параметров")
+base_grid_result, base_sharpe, base_results, _ = grid_search_optimization(
+    data_dict, ind_dict, price_arr, param_grid_base, start_cfg=1, debug_filters=False
+)
+
+if base_results:
+    all_results.extend(base_results)
+    if base_sharpe > best_sharpe_global:
+        best_sharpe_global = base_sharpe
+        best_params_global = base_grid_result
+        print(f"\n⚠️ Базовая сетка дала лучший результат: Sharpe={base_sharpe:.2f}")
 
 # ──────────────────────────────────────────────
 # 📊 ИТОГИ
 # ──────────────────────────────────────────────
-if results:
-    df_res = pd.DataFrame(results).sort_values('Sharpe', ascending=False).reset_index(drop=True)
-    print("\n" + "=" * 30)
-    print("🏆 ТОП РЕЗУЛЬТАТЫ")
-    print("=" * 30)
-    print(df_res.head(5).to_string(index=False))
-
-    best = df_res.iloc[0]
-    print(f"\n📌 Лучшие параметры: {best['Params']}")
-
-    df_res.drop(columns='Params').to_csv('sngs_multi_tf_optimization.csv', index=False, encoding='utf-8-sig')
-    print("💾 Отчет сохранен: sngs_multi_tf_optimization.csv")
+if all_results:
+    # Преобразуем результаты в DataFrame
+    df_res_list = []
+    for res in all_results:
+        if isinstance(res, dict) and 'Sharpe' in res:
+            df_res_list.append(res)
+        elif isinstance(res, dict) and 'sharpe' in res:
+            df_res_list.append({
+                'Sharpe': round(res['sharpe'], 2),
+                'Return': round(res['return'] * 100, 2),
+                'DD': round(res['dd'] * 100, 2),
+                'Trades': res['trades'],
+                'WinRate': round(res['win_rate'], 1),
+                'Params': res['params']
+            })
+    
+    if df_res_list:
+        df_res = pd.DataFrame(df_res_list).sort_values('Sharpe', ascending=False).reset_index(drop=True)
+        
+        print("\n" + "=" * 60)
+        print("🏆 ТОП-10 РЕЗУЛЬТАТОВ АВТО-ОПТИМИЗАЦИИ")
+        print("=" * 60)
+        print(df_res.head(10).to_string(index=False))
+        
+        if not df_res.empty:
+            best = df_res.iloc[0]
+            print(f"\n📌 ЛУЧШИЕ ПАРАМЕТРЫ:")
+            for k, v in best['Params'].items():
+                print(f"   {k}: {v}")
+            print(f"\n📈 Метрики:")
+            print(f"   Sharpe Ratio: {best['Sharpe']:.2f}")
+            print(f"   Total Return: {best['Return']:.2f}%")
+            print(f"   Max Drawdown: {best['DD']:.2f}%")
+            print(f"   Trades: {best['Trades']}")
+            print(f"   Win Rate: {best['WinRate']:.1f}%")
+        
+        # Сохраняем все результаты
+        df_res.drop(columns='Params').to_csv('sngs_auto_optimization_full.csv', index=False, encoding='utf-8-sig')
+        print("\n💾 Полный отчет сохранен: sngs_auto_optimization_full.csv")
+        
+        # Сохраняем только топ-20
+        df_res.head(20).drop(columns='Params').to_csv('sngs_auto_optimization_top20.csv', index=False, encoding='utf-8-sig')
+        print("💾 Топ-20 сохранен: sngs_auto_optimization_top20.csv")
 else:
     print("\n⚠️ Стратегия не совершила ни одной успешной сделки или не прошла фильтры.")
     print("Возможные причины:")
     print("1. Условия входа слишком строгие.")
     print("2. Тренд 1D (EMA10 > EMA32) отсутствовал в выбранные даты.")
+    print("3. Диапазоны параметров требуют расширения.")
