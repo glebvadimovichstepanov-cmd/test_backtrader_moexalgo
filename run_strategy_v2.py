@@ -421,14 +421,15 @@ def random_search_optimization(data_dict, ind_dict, price_arr, param_ranges, n_i
     best_result = None
     best_sharpe = -999
     
-    # Ограничиваем количество процессов для избежания нехватки ресурсов Windows
-    max_workers = min(4, n_iterations)  # Максимум 4 процесса
+    # Для i7-14700 используем только P-ядра (8 штук) - самые производительные ядра.
+    # E-ядра не используем, чтобы избежать проблем с синхронизацией и переполнением буферов Windows.
+    max_workers = 8
     print(f"\n🔎 Случайный поиск ({n_iterations} итераций, процессов: {max_workers})...")
     
     # Сериализуем данные для передачи в процессы
     import pickle
-    data_dict_serialized = pickle.dumps(data_dict)
-    ind_dict_serialized = pickle.dumps(ind_dict)
+    data_dict_serialized = pickle.dumps(data_dict, protocol=pickle.HIGHEST_PROTOCOL)
+    ind_dict_serialized = pickle.dumps(ind_dict, protocol=pickle.HIGHEST_PROTOCOL)
     
     # Генерируем все параметры заранее
     params_list = []
@@ -475,15 +476,16 @@ def refine_optimization(data_dict, ind_dict, price_arr, best_params, param_range
         best_result = base_result
         sharpe_baseline = base_result['sharpe']
     
-    # Ограничиваем количество процессов для избежания нехватки ресурсов Windows
-    max_workers = min(4, n_iterations)  # Максимум 4 процесса
+    # Для i7-14700 используем только P-ядра (8 штук) - самые производительные ядра.
+    # E-ядра не используем, чтобы избежать проблем с синхронизацией и переполнением буферов Windows.
+    max_workers = 8
     print(f"\n🔬 Уточняющая оптимизация вокруг лучших параметров ({n_iterations} итераций, процессов: {max_workers})...")
     print(f"   Базовый Sharpe: {sharpe_baseline:.2f}")
     
     # Сериализуем данные для передачи в процессы
     import pickle
-    data_dict_serialized = pickle.dumps(data_dict)
-    ind_dict_serialized = pickle.dumps(ind_dict)
+    data_dict_serialized = pickle.dumps(data_dict, protocol=pickle.HIGHEST_PROTOCOL)
+    ind_dict_serialized = pickle.dumps(ind_dict, protocol=pickle.HIGHEST_PROTOCOL)
     
     # Сужаем диапазоны вокруг лучших значений (10% от диапазона)
     narrow_ranges = {}
