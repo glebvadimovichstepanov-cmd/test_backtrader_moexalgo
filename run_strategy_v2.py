@@ -6,7 +6,7 @@ import numpy as np
 import warnings
 import traceback
 from itertools import product
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
 
 warnings.filterwarnings('ignore')
@@ -408,18 +408,29 @@ def evaluate_params(p, data_dict, ind_dict, price_arr, cfg_count_ref):
         return None, 0
 
 
-def evaluate_params_thread(args):
-    """Обертка для многопоточности (потокобезопасная версия)"""
-    p, data_dict, ind_dict, price_arr, cfg_count_ref = args
+def evaluate_params_mp(args):
+    """Обертка для многопроцессорности (сериализуемая версия)"""
+    p, data_dict_serialized, ind_dict_serialized, price_arr, cfg_count_ref = args
+    
+    # Восстанавливаем данные из сериализованного формата
+    import pickle
+    data_dict = pickle.loads(data_dict_serialized)
+    ind_dict = pickle.loads(ind_dict_serialized)
+    
     return evaluate_params(p, data_dict, ind_dict, price_arr, cfg_count_ref)
 
 
 def random_search_optimization(data_dict, ind_dict, price_arr, param_ranges, n_iterations=100):
-    """Случайный поиск оптимальных параметров с многопоточностью"""
+    """Случайный поиск оптимальных параметров с многопроцессорностью"""
     best_result = None
     best_sharpe = -999
     
-    print(f"\n🔎 Случайный поиск ({n_iterations} итераций, потоков: {multiprocessing.cpu_count()})...")
+    print(f"\n🔎 Случайный поиск ({n_iterations} итераций, процессов: {multiprocessing.cpu_count()})...")
+    
+    # Сериализуем данные для передачи в процессы
+    import pickle
+    data_dict_serialized = pickle.dumps(data_dict)
+    ind_dict_serialized = pickle.dumps(ind_dict)
     
     # Генерируем все параметры заранее
     params_list = []
@@ -435,12 +446,12 @@ def random_search_optimization(data_dict, ind_dict, price_arr, param_ranges, n_i
             'tp_atr_mult': np.random.uniform(param_ranges['tp_atr_mult'][0], param_ranges['tp_atr_mult'][1]),
             'doji_thresh': np.random.uniform(param_ranges['doji_thresh'][0], param_ranges['doji_thresh'][1])
         }
-        params_list.append((p, data_dict, ind_dict, price_arr, i))
+        params_list.append((p, data_dict_serialized, ind_dict_serialized, price_arr, i))
     
-    # Запускаем многопоточную обработку
+    # Запускаем многопроцессорную обработку
     max_workers = min(multiprocessing.cpu_count(), n_iterations)
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(evaluate_params_thread, args) for args in params_list]
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(evaluate_params_mp, args) for args in params_list]
         
         completed = 0
         for future in as_completed(futures):
@@ -457,7 +468,7 @@ def random_search_optimization(data_dict, ind_dict, price_arr, param_ranges, n_i
 
 
 def refine_optimization(data_dict, ind_dict, price_arr, best_params, param_ranges, n_iterations=50):
-    """Уточняющая оптимизация вокруг лучших параметров с многопоточностью"""
+    """Уточняющая оптимизация вокруг лучших параметров с многопроцессорностью"""
     best_result = {'sharpe': -999, 'params': best_params}
     sharpe_baseline = best_result['sharpe']
     
@@ -467,8 +478,13 @@ def refine_optimization(data_dict, ind_dict, price_arr, best_params, param_range
         best_result = base_result
         sharpe_baseline = base_result['sharpe']
     
-    print(f"\n🔬 Уточняющая оптимизация вокруг лучших параметров ({n_iterations} итераций, потоков: {multiprocessing.cpu_count()})...")
+    print(f"\n🔬 Уточняющая оптимизация вокруг лучших параметров ({n_iterations} итераций, процессов: {multiprocessing.cpu_count()})...")
     print(f"   Базовый Sharpe: {sharpe_baseline:.2f}")
+    
+    # Сериализуем данные для передачи в процессы
+    import pickle
+    data_dict_serialized = pickle.dumps(data_dict)
+    ind_dict_serialized = pickle.dumps(ind_dict)
     
     # Сужаем диапазоны вокруг лучших значений (10% от диапазона)
     narrow_ranges = {}
@@ -495,12 +511,12 @@ def refine_optimization(data_dict, ind_dict, price_arr, best_params, param_range
             'tp_atr_mult': np.random.uniform(narrow_ranges['tp_atr_mult'][0], narrow_ranges['tp_atr_mult'][1]),
             'doji_thresh': np.random.uniform(narrow_ranges['doji_thresh'][0], narrow_ranges['doji_thresh'][1])
         }
-        params_list.append((p, data_dict, ind_dict, price_arr, i))
+        params_list.append((p, data_dict_serialized, ind_dict_serialized, price_arr, i))
     
-    # Запускаем многопоточную обработку
+    # Запускаем многопроцессорную обработку
     max_workers = min(multiprocessing.cpu_count(), n_iterations)
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(evaluate_params_thread, args) for args in params_list]
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(evaluate_params_mp, args) for args in params_list]
         
         completed = 0
         for future in as_completed(futures):
