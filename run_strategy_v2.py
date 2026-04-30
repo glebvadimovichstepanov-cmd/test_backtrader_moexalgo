@@ -338,6 +338,9 @@ ind_dict = {}
 for tf, df in data_dict.items():
     ind_dict[tf] = calculate_indicators(df, tf)
 
+# Массив цен для backtesting (используем close с 1минутного таймфрейма)
+price_arr = data_dict['1T']['close'].values
+
 # Базовая сетка параметров для начального поиска
 param_grid_base = {
     'vol_1d_mult': [0.5, 0.8],
