@@ -28,11 +28,17 @@ def load_data():
         if not isinstance(df.index, pd.DatetimeIndex):
             df.index = pd.to_datetime(df.index)
         df.index.name = None
+        # Проверяем, достаточно ли данных в кэше (минимум 50000 свечей для хорошей оптимизации)
+        if len(df) < 50000:
+            print(f"⚠️ В кэше мало данных ({len(df)} свечей), перезагружаем...")
+            os.remove(CACHE_FILE)
+            return load_data()
     else:
         print("📥 Загружаем SNGS с MOEX (исторические данные)...")
         ticker = moexalgo.Ticker('SNGS')
-        start_date = pd.Timestamp('2024-06-01')
-        end_date = pd.Timestamp('2024-12-28')
+        # Расширенный период: 2 года данных для достаточного количества свечей
+        start_date = pd.Timestamp('2023-01-01')
+        end_date = pd.Timestamp('2024-12-31')
         chunks = []
         current = start_date
 
