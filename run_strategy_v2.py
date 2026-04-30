@@ -164,7 +164,7 @@ def calculate_indicators(df, tf_name):
 # ──────────────────────────────────────────────
 # 📤 ГЕНЕРАЦИЯ ОРДЕРОВ (МУЛЬТИ-ТФ ЛОГИКА)
 # ──────────────────────────────────────────────
-def generate_orders_multi_tf(data_dict, ind_dict, params):
+def generate_orders_multi_tf(data_dict, ind_dict, params, debug_stats=False):
     df_base = data_dict['1T']
     ind_base = ind_dict['1T']
     ind_15 = ind_dict['15T']
@@ -185,6 +185,24 @@ def generate_orders_multi_tf(data_dict, ind_dict, params):
     atr_entry = np.nan
 
     p = params
+
+    # Статистика по фильтрам для диагностики
+    stats = {
+        'total_bars': n,
+        'after_trend_filter': 0,
+        'filtered_trend': 0,
+        'after_vol_filter': 0,
+        'filtered_vol_1d': 0,
+        'filtered_vol_15': 0,
+        'filtered_vol_1m': 0,
+        'after_doji_filter': 0,
+        'filtered_doji': 0,
+        'after_rsi_filter': 0,
+        'filtered_rsi': 0,
+        'entries': 0,
+        'exits_sl': 0,
+        'exits_tp': 0
+    }
 
     for i in range(n):
         close_i = ind_base['close'].iloc[i]
@@ -212,7 +230,9 @@ def generate_orders_multi_tf(data_dict, ind_dict, params):
                    (ts_1d['ema10'].iloc[i] > ts_1d['ema32'].iloc[i])
 
         if not trend_1d:
+            stats['filtered_trend'] += 1
             continue
+        stats['after_trend_filter'] += 1
 
         # 2. ФИЛЬТР ВОЛАТИЛЬНОСТИ
         vol_pass_1d = False
@@ -230,13 +250,24 @@ def generate_orders_multi_tf(data_dict, ind_dict, params):
             if atr_1m > p['vol_1m_mult'] * atr_1m_med:
                 vol_pass_1m = True
 
-        if not (vol_pass_1d and vol_pass_15 and vol_pass_1m):
+        if not vol_pass_1d:
+            stats['filtered_vol_1d'] += 1
             continue
+        if not vol_pass_15:
+            stats['filtered_vol_15'] += 1
+            continue
+        if not vol_pass_1m:
+            stats['filtered_vol_1m'] += 1
+            continue
+        stats['after_vol_filter'] += 1
 
         # 3. Doji Filter
         if not pd.isna(doji_1m):
             if doji_1m < 0.3:
+                stats['filtered_doji'] += 1
                 continue
+
+        stats['after_doji_filter'] += 1
 
         # 4. ФИЛЬТР RSI
         rsi_pass = (rsi_1d < p['rsi_1d_thresh']) and \
@@ -244,7 +275,10 @@ def generate_orders_multi_tf(data_dict, ind_dict, params):
                    (rsi_1m < p['rsi_1m_thresh'])
 
         if not rsi_pass:
+            stats['filtered_rsi'] += 1
             continue
+
+        stats['after_rsi_filter'] += 1
 
         # === СИГНАЛ НА ВХОД ===
         if pos == 0:
@@ -256,6 +290,7 @@ def generate_orders_multi_tf(data_dict, ind_dict, params):
 
             directions[i] = 1
             sizes[i] = 1.0
+            stats['entries'] += 1
 
         # === УПРАВЛЕНИЕ ПОЗИЦИЕЙ ===
         elif pos == 1:
@@ -263,10 +298,26 @@ def generate_orders_multi_tf(data_dict, ind_dict, params):
                 directions[i] = 2
                 sizes[i] = 1.0
                 pos = 0
+                stats['exits_sl'] += 1
             elif high_i >= tp_price:
                 directions[i] = 2
                 sizes[i] = 1.0
                 pos = 0
+                stats['exits_tp'] += 1
+
+    if debug_stats:
+        print(f"\n📊 СТАТИСТИКА ФИЛЬТРОВ для параметров: {p}")
+        print(f"   Всего баров: {stats['total_bars']}")
+        print(f"   После тренд-фильтра: {stats['after_trend_filter']} (отфильтровано: {stats['filtered_trend']})")
+        print(f"   После волатильности: {stats['after_vol_filter']}")
+        print(f"      ├─ Отфильтровано 1D: {stats['filtered_vol_1d']}")
+        print(f"      ├─ Отфильтровано 15T: {stats['filtered_vol_15']}")
+        print(f"      └─ Отфильтровано 1M: {stats['filtered_vol_1m']}")
+        print(f"   После Doji-фильтра: {stats['after_doji_filter']} (отфильтровано: {stats['filtered_doji']})")
+        print(f"   После RSI-фильтра: {stats['after_rsi_filter']} (отфильтровано: {stats['filtered_rsi']})")
+        print(f"   Итого сигналов на вход: {stats['entries']}")
+        print(f"   Выходы по SL: {stats['exits_sl']}, по TP: {stats['exits_tp']}")
+        print("-" * 60)
 
     return directions, sizes
 
@@ -311,12 +362,17 @@ cfg_count = 0
 print("🔄 Запуск оптимизации...")
 price_arr = np.ascontiguousarray(ind_dict['1T']['close'].values.astype(np.float64))
 
+# Для отладки можно включить статистику по фильтрам (первый прогон или лучший конфиг)
+DEBUG_FILTERS = True  # Включить вывод статистики фильтров
+
 for vals in product(*param_grid.values()):
     p = dict(zip(param_grid.keys(), vals))
     cfg_count += 1
 
     try:
-        dirs, sizes = generate_orders_multi_tf(data_dict, ind_dict, p)
+        # Показываем детальную статистику фильтров для первых нескольких конфигов
+        show_stats = DEBUG_FILTERS and cfg_count <= 5
+        dirs, sizes = generate_orders_multi_tf(data_dict, ind_dict, p, debug_stats=show_stats)
 
         active_mask = ~np.isnan(sizes)
         if active_mask.sum() == 0:
@@ -356,6 +412,9 @@ for vals in product(*param_grid.values()):
         if sr > best_sharpe:
             best_sharpe = sr
             best_params = p
+            # Показываем полную статистику фильтров для нового лидера
+            dirs_debug, sizes_debug = generate_orders_multi_tf(data_dict, ind_dict, p, debug_stats=True)
+            
             results.append({
                 'Sharpe': round(sr, 2),
                 'Return': round(ret * 100, 2),
