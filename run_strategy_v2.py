@@ -421,7 +421,9 @@ def random_search_optimization(data_dict, ind_dict, price_arr, param_ranges, n_i
     best_result = None
     best_sharpe = -999
     
-    print(f"\n🔎 Случайный поиск ({n_iterations} итераций, процессов: {multiprocessing.cpu_count()})...")
+    # Ограничиваем количество процессов для избежания нехватки ресурсов Windows
+    max_workers = min(4, n_iterations)  # Максимум 4 процесса
+    print(f"\n🔎 Случайный поиск ({n_iterations} итераций, процессов: {max_workers})...")
     
     # Сериализуем данные для передачи в процессы
     import pickle
@@ -444,8 +446,7 @@ def random_search_optimization(data_dict, ind_dict, price_arr, param_ranges, n_i
         }
         params_list.append((p, data_dict_serialized, ind_dict_serialized, price_arr, i))
     
-    # Запускаем многопроцессорную обработку
-    max_workers = min(multiprocessing.cpu_count(), n_iterations)
+    # Запускаем многопроцессорную обработку с ограниченным количеством процессов
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(evaluate_params_mp, args) for args in params_list]
         
@@ -474,7 +475,9 @@ def refine_optimization(data_dict, ind_dict, price_arr, best_params, param_range
         best_result = base_result
         sharpe_baseline = base_result['sharpe']
     
-    print(f"\n🔬 Уточняющая оптимизация вокруг лучших параметров ({n_iterations} итераций, процессов: {multiprocessing.cpu_count()})...")
+    # Ограничиваем количество процессов для избежания нехватки ресурсов Windows
+    max_workers = min(4, n_iterations)  # Максимум 4 процесса
+    print(f"\n🔬 Уточняющая оптимизация вокруг лучших параметров ({n_iterations} итераций, процессов: {max_workers})...")
     print(f"   Базовый Sharpe: {sharpe_baseline:.2f}")
     
     # Сериализуем данные для передачи в процессы
@@ -509,8 +512,7 @@ def refine_optimization(data_dict, ind_dict, price_arr, best_params, param_range
         }
         params_list.append((p, data_dict_serialized, ind_dict_serialized, price_arr, i))
     
-    # Запускаем многопроцессорную обработку
-    max_workers = min(multiprocessing.cpu_count(), n_iterations)
+    # Запускаем многопроцессорную обработку с ограниченным количеством процессов
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(evaluate_params_mp, args) for args in params_list]
         
