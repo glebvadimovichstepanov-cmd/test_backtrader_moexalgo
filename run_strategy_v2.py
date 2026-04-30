@@ -6,6 +6,8 @@ import numpy as np
 import warnings
 import traceback
 from itertools import product
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import multiprocessing
 
 warnings.filterwarnings('ignore')
 pd.set_option('mode.chained_assignment', None)
@@ -406,15 +408,22 @@ def evaluate_params(p, data_dict, ind_dict, price_arr, cfg_count_ref):
         return None, 0
 
 
+def evaluate_params_thread(args):
+    """Обертка для многопоточности (потокобезопасная версия)"""
+    p, data_dict, ind_dict, price_arr, cfg_count_ref = args
+    return evaluate_params(p, data_dict, ind_dict, price_arr, cfg_count_ref)
+
+
 def random_search_optimization(data_dict, ind_dict, price_arr, param_ranges, n_iterations=100):
-    """Случайный поиск оптимальных параметров"""
+    """Случайный поиск оптимальных параметров с многопоточностью"""
     best_result = None
     best_sharpe = -999
     
-    print(f"\n🔎 Случайный поиск ({n_iterations} итераций)...")
+    print(f"\n🔎 Случайный поиск ({n_iterations} итераций, потоков: {multiprocessing.cpu_count()})...")
     
+    # Генерируем все параметры заранее
+    params_list = []
     for i in range(n_iterations):
-        # Генерируем случайные параметры в заданных диапазонах
         p = {
             'vol_1d_mult': np.random.uniform(param_ranges['vol_1d_mult'][0], param_ranges['vol_1d_mult'][1]),
             'vol_15_mult': np.random.uniform(param_ranges['vol_15_mult'][0], param_ranges['vol_15_mult'][1]),
@@ -426,20 +435,29 @@ def random_search_optimization(data_dict, ind_dict, price_arr, param_ranges, n_i
             'tp_atr_mult': np.random.uniform(param_ranges['tp_atr_mult'][0], param_ranges['tp_atr_mult'][1]),
             'doji_thresh': np.random.uniform(param_ranges['doji_thresh'][0], param_ranges['doji_thresh'][1])
         }
+        params_list.append((p, data_dict, ind_dict, price_arr, i))
+    
+    # Запускаем многопоточную обработку
+    max_workers = min(multiprocessing.cpu_count(), n_iterations)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(evaluate_params_thread, args) for args in params_list]
         
-        result, trades = evaluate_params(p, data_dict, ind_dict, price_arr, i)
-        
-        if result is not None and result['sharpe'] > best_sharpe:
-            best_sharpe = result['sharpe']
-            best_result = result
-            if i % 20 == 0:
-                print(f"  Итерация {i}: Sharpe={result['sharpe']:.2f}, Trades={result['trades']}")
+        completed = 0
+        for future in as_completed(futures):
+            result, trades = future.result()
+            completed += 1
+            
+            if result is not None and result['sharpe'] > best_sharpe:
+                best_sharpe = result['sharpe']
+                best_result = result
+                if completed % 20 == 0:
+                    print(f"  Обработано {completed}/{n_iterations}: текущий Sharpe={result['sharpe']:.2f}, Trades={result['trades']}")
     
     return best_result
 
 
 def refine_optimization(data_dict, ind_dict, price_arr, best_params, param_ranges, n_iterations=50):
-    """Уточняющая оптимизация вокруг лучших параметров"""
+    """Уточняющая оптимизация вокруг лучших параметров с многопоточностью"""
     best_result = {'sharpe': -999, 'params': best_params}
     sharpe_baseline = best_result['sharpe']
     
@@ -449,7 +467,7 @@ def refine_optimization(data_dict, ind_dict, price_arr, best_params, param_range
         best_result = base_result
         sharpe_baseline = base_result['sharpe']
     
-    print(f"\n🔬 Уточняющая оптимизация вокруг лучших параметров ({n_iterations} итераций)...")
+    print(f"\n🔬 Уточняющая оптимизация вокруг лучших параметров ({n_iterations} итераций, потоков: {multiprocessing.cpu_count()})...")
     print(f"   Базовый Sharpe: {sharpe_baseline:.2f}")
     
     # Сужаем диапазоны вокруг лучших значений (10% от диапазона)
@@ -463,6 +481,8 @@ def refine_optimization(data_dict, ind_dict, price_arr, best_params, param_range
             min(param_ranges[key][1], center + narrow_range)
         ]
     
+    # Генерируем все параметры заранее
+    params_list = []
     for i in range(n_iterations):
         p = {
             'vol_1d_mult': np.random.uniform(narrow_ranges['vol_1d_mult'][0], narrow_ranges['vol_1d_mult'][1]),
@@ -475,13 +495,23 @@ def refine_optimization(data_dict, ind_dict, price_arr, best_params, param_range
             'tp_atr_mult': np.random.uniform(narrow_ranges['tp_atr_mult'][0], narrow_ranges['tp_atr_mult'][1]),
             'doji_thresh': np.random.uniform(narrow_ranges['doji_thresh'][0], narrow_ranges['doji_thresh'][1])
         }
+        params_list.append((p, data_dict, ind_dict, price_arr, i))
+    
+    # Запускаем многопоточную обработку
+    max_workers = min(multiprocessing.cpu_count(), n_iterations)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(evaluate_params_thread, args) for args in params_list]
         
-        result, trades = evaluate_params(p, data_dict, ind_dict, price_arr, i)
-        
-        if result is not None and result['sharpe'] > best_result['sharpe']:
-            improvement = result['sharpe'] - sharpe_baseline
-            best_result = result
-            print(f"  Итерация {i}: Sharpe={result['sharpe']:.2f} (+{improvement:.2f}), Trades={result['trades']}")
+        completed = 0
+        for future in as_completed(futures):
+            result, trades = future.result()
+            completed += 1
+            
+            if result is not None and result['sharpe'] > best_result['sharpe']:
+                improvement = result['sharpe'] - sharpe_baseline
+                best_result = result
+                if completed % 10 == 0:
+                    print(f"  Обработано {completed}/{n_iterations}: Sharpe={result['sharpe']:.2f} (+{improvement:.2f}), Trades={result['trades']}")
     
     return best_result
 
