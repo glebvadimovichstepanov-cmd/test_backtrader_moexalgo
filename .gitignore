@@ -1,4 +1,1 @@
-```
-# Cache and data files
-cache_data/
-```
+Nothing should be ignored in this case, as only a Python source file (`run_strategy_v2.py`) was modified and there are no build artifacts, dependencies, or temporary files in the changes.
