@@ -28,34 +28,35 @@ def load_data():
         if not isinstance(df.index, pd.DatetimeIndex):
             df.index = pd.to_datetime(df.index)
         df.index.name = None
-        # Проверяем, достаточно ли данных в кэше (минимум 50000 свечей для хорошей оптимизации)
-        if len(df) < 50000:
+        # Проверяем, достаточно ли данных в кэше (минимум 100000 свечей для хорошей оптимизации)
+        if len(df) < 100000:
             print(f"⚠️ В кэше мало данных ({len(df)} свечей), перезагружаем...")
             os.remove(CACHE_FILE)
             return load_data()
     else:
         print("📥 Загружаем SNGS с MOEX (исторические данные)...")
         ticker = moexalgo.Ticker('SNGS')
-        # Расширенный период: 2 года данных для достаточного количества свечей
-        start_date = pd.Timestamp('2023-01-01')
+        # Расширенный период: 3 года данных для достаточного количества свечей
+        start_date = pd.Timestamp('2022-01-01')
         end_date = pd.Timestamp('2024-12-31')
         chunks = []
         current = start_date
 
+        # Загружаем по неделям для получения большего количества баров
         while current < end_date:
-            next_m = min(current + pd.DateOffset(months=1), end_date)
+            next_week = min(current + pd.DateOffset(weeks=1), end_date)
             try:
                 chunk = ticker.candles(
                     start=current.strftime('%Y-%m-%d'),
-                    end=next_m.strftime('%Y-%m-%d'),
+                    end=next_week.strftime('%Y-%m-%d'),
                     period='5min'
                 )
                 if chunk is not None and not chunk.empty:
                     chunks.append(chunk)
-                    print(f"  ✓ Загружено: {current.date()} - {next_m.date()} ({len(chunk)} баров)")
+                    print(f"  ✓ Загружено: {current.date()} - {next_week.date()} ({len(chunk)} баров)")
             except Exception as e:
                 print(f"⚠️ Пропуск чанка {current.date()}: {e}")
-            current = next_m
+            current = next_week
 
         if not chunks:
             raise ValueError("❌ Данные не получены.")
