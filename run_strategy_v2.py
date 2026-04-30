@@ -355,6 +355,226 @@ best_params_global = None
 all_results = []
 
 
+def evaluate_params(p, data_dict, ind_dict, price_arr, cfg_count_ref):
+    """Вычисляет метрики для заданных параметров"""
+    try:
+        dirs, sizes = generate_orders_multi_tf(data_dict, ind_dict, p, debug_stats=False)
+        
+        active_mask = ~np.isnan(sizes)
+        if active_mask.sum() == 0:
+            return None, 0
+        
+        dirs_arr = np.ascontiguousarray(dirs)
+        sizes_arr = np.ascontiguousarray(sizes)
+        
+        pf = vbt.Portfolio.from_orders(
+            close=price_arr,
+            direction=dirs_arr,
+            size=sizes_arr,
+            size_type='percent',
+            init_cash=float(INIT_CASH),
+            fees=FEES,
+            allow_partial=True,
+            cash_sharing=False,
+            lock_cash=False
+        )
+        
+        t = int(pf.trades.count())
+        if t < MIN_TRADES:
+            return None, 0
+        
+        sr = float(pf.sharpe_ratio())
+        dd = float(pf.max_drawdown())
+        ret = float(pf.total_return())
+        wr = float(pf.trades.win_rate()) * 100
+        
+        if pd.isna(sr) or pd.isinf(sr) or dd > 0.5:
+            return None, 0
+        
+        return {
+            'sharpe': sr,
+            'return': ret,
+            'dd': dd,
+            'trades': t,
+            'win_rate': wr,
+            'params': p.copy()
+        }, t
+        
+    except Exception as e:
+        return None, 0
+
+
+def evaluate_params_mp(args):
+    """Обертка для многопроцессорности (сериализуемая версия)"""
+    p, data_dict_serialized, ind_dict_serialized, price_arr, cfg_count_ref = args
+    
+    # Восстанавливаем данные из сериализованного формата
+    import pickle
+    data_dict = pickle.loads(data_dict_serialized)
+    ind_dict = pickle.loads(ind_dict_serialized)
+    
+    return evaluate_params(p, data_dict, ind_dict, price_arr, cfg_count_ref)
+
+
+def random_search_optimization(data_dict, ind_dict, price_arr, param_ranges, n_iterations=100):
+    """Случайный поиск оптимальных параметров с многопроцессорностью"""
+    best_result = None
+    best_sharpe = -999
+    
+    print(f"\n🔎 Случайный поиск ({n_iterations} итераций, процессов: {multiprocessing.cpu_count()})...")
+    
+    # Сериализуем данные для передачи в процессы
+    import pickle
+    data_dict_serialized = pickle.dumps(data_dict)
+    ind_dict_serialized = pickle.dumps(ind_dict)
+    
+    # Генерируем все параметры заранее
+    params_list = []
+    for i in range(n_iterations):
+        p = {
+            'vol_1d_mult': np.random.uniform(param_ranges['vol_1d_mult'][0], param_ranges['vol_1d_mult'][1]),
+            'vol_15_mult': np.random.uniform(param_ranges['vol_15_mult'][0], param_ranges['vol_15_mult'][1]),
+            'vol_1m_mult': np.random.uniform(param_ranges['vol_1m_mult'][0], param_ranges['vol_1m_mult'][1]),
+            'rsi_1d_thresh': np.random.uniform(param_ranges['rsi_1d_thresh'][0], param_ranges['rsi_1d_thresh'][1]),
+            'rsi_15_thresh': np.random.uniform(param_ranges['rsi_15_thresh'][0], param_ranges['rsi_15_thresh'][1]),
+            'rsi_1m_thresh': np.random.uniform(param_ranges['rsi_1m_thresh'][0], param_ranges['rsi_1m_thresh'][1]),
+            'sl_atr_mult': np.random.uniform(param_ranges['sl_atr_mult'][0], param_ranges['sl_atr_mult'][1]),
+            'tp_atr_mult': np.random.uniform(param_ranges['tp_atr_mult'][0], param_ranges['tp_atr_mult'][1]),
+            'doji_thresh': np.random.uniform(param_ranges['doji_thresh'][0], param_ranges['doji_thresh'][1])
+        }
+        params_list.append((p, data_dict_serialized, ind_dict_serialized, price_arr, i))
+    
+    # Запускаем многопроцессорную обработку
+    max_workers = min(multiprocessing.cpu_count(), n_iterations)
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(evaluate_params_mp, args) for args in params_list]
+        
+        completed = 0
+        for future in as_completed(futures):
+            result, trades = future.result()
+            completed += 1
+            
+            if result is not None and result['sharpe'] > best_sharpe:
+                best_sharpe = result['sharpe']
+                best_result = result
+                if completed % 20 == 0:
+                    print(f"  Обработано {completed}/{n_iterations}: текущий Sharpe={result['sharpe']:.2f}, Trades={result['trades']}")
+    
+    return best_result
+
+
+def refine_optimization(data_dict, ind_dict, price_arr, best_params, param_ranges, n_iterations=50):
+    """Уточняющая оптимизация вокруг лучших параметров с многопроцессорностью"""
+    best_result = {'sharpe': -999, 'params': best_params}
+    sharpe_baseline = best_result['sharpe']
+    
+    # Вычисляем базовый Sharpe для лучших параметров
+    base_result, _ = evaluate_params(best_params, data_dict, ind_dict, price_arr, 0)
+    if base_result:
+        best_result = base_result
+        sharpe_baseline = base_result['sharpe']
+    
+    print(f"\n🔬 Уточняющая оптимизация вокруг лучших параметров ({n_iterations} итераций, процессов: {multiprocessing.cpu_count()})...")
+    print(f"   Базовый Sharpe: {sharpe_baseline:.2f}")
+    
+    # Сериализуем данные для передачи в процессы
+    import pickle
+    data_dict_serialized = pickle.dumps(data_dict)
+    ind_dict_serialized = pickle.dumps(ind_dict)
+    
+    # Сужаем диапазоны вокруг лучших значений (10% от диапазона)
+    narrow_ranges = {}
+    for key in best_params.keys():
+        center = best_params[key]
+        range_size = param_ranges[key][1] - param_ranges[key][0]
+        narrow_range = range_size * 0.1
+        narrow_ranges[key] = [
+            max(param_ranges[key][0], center - narrow_range),
+            min(param_ranges[key][1], center + narrow_range)
+        ]
+    
+    # Генерируем все параметры заранее
+    params_list = []
+    for i in range(n_iterations):
+        p = {
+            'vol_1d_mult': np.random.uniform(narrow_ranges['vol_1d_mult'][0], narrow_ranges['vol_1d_mult'][1]),
+            'vol_15_mult': np.random.uniform(narrow_ranges['vol_15_mult'][0], narrow_ranges['vol_15_mult'][1]),
+            'vol_1m_mult': np.random.uniform(narrow_ranges['vol_1m_mult'][0], narrow_ranges['vol_1m_mult'][1]),
+            'rsi_1d_thresh': np.random.uniform(narrow_ranges['rsi_1d_thresh'][0], narrow_ranges['rsi_1d_thresh'][1]),
+            'rsi_15_thresh': np.random.uniform(narrow_ranges['rsi_15_thresh'][0], narrow_ranges['rsi_15_thresh'][1]),
+            'rsi_1m_thresh': np.random.uniform(narrow_ranges['rsi_1m_thresh'][0], narrow_ranges['rsi_1m_thresh'][1]),
+            'sl_atr_mult': np.random.uniform(narrow_ranges['sl_atr_mult'][0], narrow_ranges['sl_atr_mult'][1]),
+            'tp_atr_mult': np.random.uniform(narrow_ranges['tp_atr_mult'][0], narrow_ranges['tp_atr_mult'][1]),
+            'doji_thresh': np.random.uniform(narrow_ranges['doji_thresh'][0], narrow_ranges['doji_thresh'][1])
+        }
+        params_list.append((p, data_dict_serialized, ind_dict_serialized, price_arr, i))
+    
+    # Запускаем многопроцессорную обработку
+    max_workers = min(multiprocessing.cpu_count(), n_iterations)
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(evaluate_params_mp, args) for args in params_list]
+        
+        completed = 0
+        for future in as_completed(futures):
+            result, trades = future.result()
+            completed += 1
+            
+            if result is not None and result['sharpe'] > best_result['sharpe']:
+                improvement = result['sharpe'] - sharpe_baseline
+                best_result = result
+                if completed % 10 == 0:
+                    print(f"  Обработано {completed}/{n_iterations}: Sharpe={result['sharpe']:.2f} (+{improvement:.2f}), Trades={result['trades']}")
+    
+    return best_result
+
+
+def grid_search_optimization(data_dict, ind_dict, price_arr, param_grid, start_cfg=1, debug_filters=False):
+    """Полный перебор по сетке параметров"""
+    best_sharpe = -999
+    best_params = None
+    results = []
+    error_count = 0
+    cfg_count = start_cfg - 1
+    
+    DEBUG_FILTERS_FLAG = debug_filters
+    
+    for vals in product(*param_grid.values()):
+        p = dict(zip(param_grid.keys(), vals))
+        cfg_count += 1
+        
+        show_stats = DEBUG_FILTERS_FLAG and cfg_count <= 5
+        
+        result, trades = evaluate_params(p, data_dict, ind_dict, price_arr, cfg_count)
+        
+        if result is None:
+            if DEBUG and cfg_count <= 10:
+                print(f"⏭️ Конфиг #{cfg_count}: Нет сделок или не прошел фильтры")
+            continue
+        
+        if DEBUG and cfg_count % 50 == 0:
+            print(f"✅ Конфиг #{cfg_count} | Сделок: {result['trades']} | SR: {result['sharpe']:.2f} | Ret: {result['return']:.2%}")
+        
+        if result['sharpe'] > best_sharpe:
+            best_sharpe = result['sharpe']
+            best_params = p
+            
+            # Показываем полную статистику фильтров для нового лидера
+            if debug_filters:
+                dirs_debug, sizes_debug = generate_orders_multi_tf(data_dict, ind_dict, p, debug_stats=True)
+            
+            results.append({
+                'Sharpe': round(result['sharpe'], 2),
+                'Return': round(result['return'] * 100, 2),
+                'DD': round(result['dd'] * 100, 2),
+                'Trades': result['trades'],
+                'WinRate': round(result['win_rate'], 1),
+                'Params': p.copy()
+            })
+            print(f"🏆 Новый лидер! Sharpe: {result['sharpe']:.2f}, Trades: {result['trades']}")
+    
+    return best_params, best_sharpe, results, cfg_count
+
+
 def run_optimization():
     """Основная функция оптимизации"""
     global best_sharpe_global, best_params_global, all_results
@@ -394,225 +614,6 @@ def run_optimization():
 
         'doji_thresh': [0.1]
     }
-    
-    def evaluate_params(p, data_dict, ind_dict, price_arr, cfg_count_ref):
-        """Вычисляет метрики для заданных параметров"""
-        try:
-            dirs, sizes = generate_orders_multi_tf(data_dict, ind_dict, p, debug_stats=False)
-            
-            active_mask = ~np.isnan(sizes)
-            if active_mask.sum() == 0:
-                return None, 0
-            
-            dirs_arr = np.ascontiguousarray(dirs)
-            sizes_arr = np.ascontiguousarray(sizes)
-            
-            pf = vbt.Portfolio.from_orders(
-                close=price_arr,
-                direction=dirs_arr,
-                size=sizes_arr,
-                size_type='percent',
-                init_cash=float(INIT_CASH),
-                fees=FEES,
-                allow_partial=True,
-                cash_sharing=False,
-                lock_cash=False
-            )
-            
-            t = int(pf.trades.count())
-            if t < MIN_TRADES:
-                return None, 0
-            
-            sr = float(pf.sharpe_ratio())
-            dd = float(pf.max_drawdown())
-            ret = float(pf.total_return())
-            wr = float(pf.trades.win_rate()) * 100
-            
-            if pd.isna(sr) or pd.isinf(sr) or dd > 0.5:
-                return None, 0
-            
-            return {
-                'sharpe': sr,
-                'return': ret,
-                'dd': dd,
-                'trades': t,
-                'win_rate': wr,
-                'params': p.copy()
-            }, t
-            
-        except Exception as e:
-            return None, 0
-
-
-    def evaluate_params_mp(args):
-        """Обертка для многопроцессорности (сериализуемая версия)"""
-        p, data_dict_serialized, ind_dict_serialized, price_arr, cfg_count_ref = args
-        
-        # Восстанавливаем данные из сериализованного формата
-        import pickle
-        data_dict = pickle.loads(data_dict_serialized)
-        ind_dict = pickle.loads(ind_dict_serialized)
-        
-        return evaluate_params(p, data_dict, ind_dict, price_arr, cfg_count_ref)
-
-
-    def random_search_optimization(data_dict, ind_dict, price_arr, param_ranges, n_iterations=100):
-        """Случайный поиск оптимальных параметров с многопроцессорностью"""
-        best_result = None
-        best_sharpe = -999
-        
-        print(f"\n🔎 Случайный поиск ({n_iterations} итераций, процессов: {multiprocessing.cpu_count()})...")
-        
-        # Сериализуем данные для передачи в процессы
-        import pickle
-        data_dict_serialized = pickle.dumps(data_dict)
-        ind_dict_serialized = pickle.dumps(ind_dict)
-        
-        # Генерируем все параметры заранее
-        params_list = []
-        for i in range(n_iterations):
-            p = {
-                'vol_1d_mult': np.random.uniform(param_ranges['vol_1d_mult'][0], param_ranges['vol_1d_mult'][1]),
-                'vol_15_mult': np.random.uniform(param_ranges['vol_15_mult'][0], param_ranges['vol_15_mult'][1]),
-                'vol_1m_mult': np.random.uniform(param_ranges['vol_1m_mult'][0], param_ranges['vol_1m_mult'][1]),
-                'rsi_1d_thresh': np.random.uniform(param_ranges['rsi_1d_thresh'][0], param_ranges['rsi_1d_thresh'][1]),
-                'rsi_15_thresh': np.random.uniform(param_ranges['rsi_15_thresh'][0], param_ranges['rsi_15_thresh'][1]),
-                'rsi_1m_thresh': np.random.uniform(param_ranges['rsi_1m_thresh'][0], param_ranges['rsi_1m_thresh'][1]),
-                'sl_atr_mult': np.random.uniform(param_ranges['sl_atr_mult'][0], param_ranges['sl_atr_mult'][1]),
-                'tp_atr_mult': np.random.uniform(param_ranges['tp_atr_mult'][0], param_ranges['tp_atr_mult'][1]),
-                'doji_thresh': np.random.uniform(param_ranges['doji_thresh'][0], param_ranges['doji_thresh'][1])
-            }
-            params_list.append((p, data_dict_serialized, ind_dict_serialized, price_arr, i))
-        
-        # Запускаем многопроцессорную обработку
-        max_workers = min(multiprocessing.cpu_count(), n_iterations)
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(evaluate_params_mp, args) for args in params_list]
-            
-            completed = 0
-            for future in as_completed(futures):
-                result, trades = future.result()
-                completed += 1
-                
-                if result is not None and result['sharpe'] > best_sharpe:
-                    best_sharpe = result['sharpe']
-                    best_result = result
-                    if completed % 20 == 0:
-                        print(f"  Обработано {completed}/{n_iterations}: текущий Sharpe={result['sharpe']:.2f}, Trades={result['trades']}")
-        
-        return best_result
-
-
-    def refine_optimization(data_dict, ind_dict, price_arr, best_params, param_ranges, n_iterations=50):
-        """Уточняющая оптимизация вокруг лучших параметров с многопроцессорностью"""
-        best_result = {'sharpe': -999, 'params': best_params}
-        sharpe_baseline = best_result['sharpe']
-        
-        # Вычисляем базовый Sharpe для лучших параметров
-        base_result, _ = evaluate_params(best_params, data_dict, ind_dict, price_arr, 0)
-        if base_result:
-            best_result = base_result
-            sharpe_baseline = base_result['sharpe']
-        
-        print(f"\n🔬 Уточняющая оптимизация вокруг лучших параметров ({n_iterations} итераций, процессов: {multiprocessing.cpu_count()})...")
-        print(f"   Базовый Sharpe: {sharpe_baseline:.2f}")
-        
-        # Сериализуем данные для передачи в процессы
-        import pickle
-        data_dict_serialized = pickle.dumps(data_dict)
-        ind_dict_serialized = pickle.dumps(ind_dict)
-        
-        # Сужаем диапазоны вокруг лучших значений (10% от диапазона)
-        narrow_ranges = {}
-        for key in best_params.keys():
-            center = best_params[key]
-            range_size = param_ranges[key][1] - param_ranges[key][0]
-            narrow_range = range_size * 0.1
-            narrow_ranges[key] = [
-                max(param_ranges[key][0], center - narrow_range),
-                min(param_ranges[key][1], center + narrow_range)
-            ]
-        
-        # Генерируем все параметры заранее
-        params_list = []
-        for i in range(n_iterations):
-            p = {
-                'vol_1d_mult': np.random.uniform(narrow_ranges['vol_1d_mult'][0], narrow_ranges['vol_1d_mult'][1]),
-                'vol_15_mult': np.random.uniform(narrow_ranges['vol_15_mult'][0], narrow_ranges['vol_15_mult'][1]),
-                'vol_1m_mult': np.random.uniform(narrow_ranges['vol_1m_mult'][0], narrow_ranges['vol_1m_mult'][1]),
-                'rsi_1d_thresh': np.random.uniform(narrow_ranges['rsi_1d_thresh'][0], narrow_ranges['rsi_1d_thresh'][1]),
-                'rsi_15_thresh': np.random.uniform(narrow_ranges['rsi_15_thresh'][0], narrow_ranges['rsi_15_thresh'][1]),
-                'rsi_1m_thresh': np.random.uniform(narrow_ranges['rsi_1m_thresh'][0], narrow_ranges['rsi_1m_thresh'][1]),
-                'sl_atr_mult': np.random.uniform(narrow_ranges['sl_atr_mult'][0], narrow_ranges['sl_atr_mult'][1]),
-                'tp_atr_mult': np.random.uniform(narrow_ranges['tp_atr_mult'][0], narrow_ranges['tp_atr_mult'][1]),
-                'doji_thresh': np.random.uniform(narrow_ranges['doji_thresh'][0], narrow_ranges['doji_thresh'][1])
-            }
-            params_list.append((p, data_dict_serialized, ind_dict_serialized, price_arr, i))
-        
-        # Запускаем многопроцессорную обработку
-        max_workers = min(multiprocessing.cpu_count(), n_iterations)
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(evaluate_params_mp, args) for args in params_list]
-            
-            completed = 0
-            for future in as_completed(futures):
-                result, trades = future.result()
-                completed += 1
-                
-                if result is not None and result['sharpe'] > best_result['sharpe']:
-                    improvement = result['sharpe'] - sharpe_baseline
-                    best_result = result
-                    if completed % 10 == 0:
-                        print(f"  Обработано {completed}/{n_iterations}: Sharpe={result['sharpe']:.2f} (+{improvement:.2f}), Trades={result['trades']}")
-        
-        return best_result
-
-
-    def grid_search_optimization(data_dict, ind_dict, price_arr, param_grid, start_cfg=1, debug_filters=False):
-        """Полный перебор по сетке параметров"""
-        best_sharpe = -999
-        best_params = None
-        results = []
-        error_count = 0
-        cfg_count = start_cfg - 1
-        
-        DEBUG_FILTERS_FLAG = debug_filters
-        
-        for vals in product(*param_grid.values()):
-            p = dict(zip(param_grid.keys(), vals))
-            cfg_count += 1
-            
-            show_stats = DEBUG_FILTERS_FLAG and cfg_count <= 5
-            
-            result, trades = evaluate_params(p, data_dict, ind_dict, price_arr, cfg_count)
-            
-            if result is None:
-                if DEBUG and cfg_count <= 10:
-                    print(f"⏭️ Конфиг #{cfg_count}: Нет сделок или не прошел фильтры")
-                continue
-            
-            if DEBUG and cfg_count % 50 == 0:
-                print(f"✅ Конфиг #{cfg_count} | Сделок: {result['trades']} | SR: {result['sharpe']:.2f} | Ret: {result['return']:.2%}")
-            
-            if result['sharpe'] > best_sharpe:
-                best_sharpe = result['sharpe']
-                best_params = p
-                
-                # Показываем полную статистику фильтров для нового лидера
-                if debug_filters:
-                    dirs_debug, sizes_debug = generate_orders_multi_tf(data_dict, ind_dict, p, debug_stats=True)
-                
-                results.append({
-                    'Sharpe': round(result['sharpe'], 2),
-                    'Return': round(result['return'] * 100, 2),
-                    'DD': round(result['dd'] * 100, 2),
-                    'Trades': result['trades'],
-                    'WinRate': round(result['win_rate'], 1),
-                    'Params': p.copy()
-                })
-                print(f"🏆 Новый лидер! Sharpe: {result['sharpe']:.2f}, Trades: {result['trades']}")
-        
-        return best_params, best_sharpe, results, cfg_count
 
     # Этап 1: Грубый случайный поиск для исследования пространства
     print("\n📊 ЭТАП 1: Грубый случайный поиск (исследование пространства)")
