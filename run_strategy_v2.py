@@ -596,161 +596,172 @@ best_sharpe_global = -999
 best_params_global = None
 all_results = []
 
-print("=" * 60)
-print("🚀 ЗАПУСК АВТОМАТИЧЕСКОГО ПОДБОРА ПАРАМЕТРОВ")
-print("=" * 60)
 
-# Этап 1: Грубый случайный поиск для исследования пространства
-print("\n📊 ЭТАП 1: Грубый случайный поиск (исследование пространства)")
-random_result = random_search_optimization(data_dict, ind_dict, price_arr, param_ranges, n_iterations=200)
-
-if random_result:
-    best_sharpe_global = random_result['sharpe']
-    best_params_global = random_result['params']
-    all_results.append(random_result)
-    print(f"\n✅ Лучший результат после случайного поиска:")
-    print(f"   Sharpe: {best_sharpe_global:.2f}")
-    print(f"   Параметры: {best_params_global}")
-else:
-    print("⚠️ Случайный поиск не дал результатов, используем базовую сетку")
-
-# Этап 2: Уточняющая оптимизация вокруг лучших найденных параметров
-if best_params_global:
-    print("\n📊 ЭТАП 2: Уточняющая оптимизация")
-    refined_result = refine_optimization(data_dict, ind_dict, price_arr, best_params_global, param_ranges, n_iterations=100)
+def run_optimization():
+    """Основная функция оптимизации"""
+    global best_sharpe_global, best_params_global, all_results
     
-    if refined_result['sharpe'] > best_sharpe_global:
-        best_sharpe_global = refined_result['sharpe']
-        best_params_global = refined_result['params']
-        all_results.append(refined_result)
-        print(f"\n✅ Улучшено после уточнения:")
-        print(f"   Sharpe: {best_sharpe_global:.2f}")
-        print(f"   Параметры: {best_params_global}")
-
-# Этап 3: Финальная тонкая настройка (еще более узкий диапазон)
-if best_params_global:
-    print("\n📊 ЭТАП 3: Финальная тонкая настройка")
-    # Еще больше сужаем диапазоны (5% от исходного)
-    fine_ranges = {}
-    for key in best_params_global.keys():
-        center = best_params_global[key]
-        range_size = param_ranges[key][1] - param_ranges[key][0]
-        fine_range = range_size * 0.05
-        fine_ranges[key] = [
-            max(param_ranges[key][0], center - fine_range),
-            min(param_ranges[key][1], center + fine_range)
-        ]
+    print("=" * 60)
+    print("🚀 ЗАПУСК АВТОМАТИЧЕСКОГО ПОДБОРА ПАРАМЕТРОВ")
+    print("=" * 60)
     
-    fine_result = refine_optimization(data_dict, ind_dict, price_arr, best_params_global, fine_ranges, n_iterations=50)
+    # Этап 1: Грубый случайный поиск для исследования пространства
+    print("\n📊 ЭТАП 1: Грубый случайный поиск (исследование пространства)")
+    random_result = random_search_optimization(data_dict, ind_dict, price_arr, param_ranges, n_iterations=200)
     
-    if fine_result['sharpe'] > best_sharpe_global:
-        best_sharpe_global = fine_result['sharpe']
-        best_params_global = fine_result['params']
-        all_results.append(fine_result)
-        print(f"\n✅ Улучшено после тонкой настройки:")
-        print(f"   Sharpe: {best_sharpe_global:.2f}")
-        print(f"   Параметры: {best_params_global}")
-
-# Этап 4: Проверка окрестностей лучших параметров с помощью grid search
-if best_params_global:
-    print("\n📊 ЭТАП 4: Локальный grid search вокруг лучших параметров")
-    
-    # Создаем узкую сетку вокруг лучших параметров
-    local_grid = {}
-    for key in best_params_global.keys():
-        center = best_params_global[key]
-        range_size = param_ranges[key][1] - param_ranges[key][0]
-        step = range_size * 0.15  # 15% шага
-        
-        values = [
-            max(param_ranges[key][0], round(center - step, 2)),
-            max(param_ranges[key][0], round(center, 2)),
-            min(param_ranges[key][1], round(center + step, 2))
-        ]
-        # Удаляем дубликаты
-        values = sorted(list(set(values)))
-        if len(values) < 2:
-            values = [center]
-        local_grid[key] = values
-    
-    print(f"   Локальная сетка: {local_grid}")
-    
-    grid_best_params, grid_best_sharpe, grid_results, total_cfgs = grid_search_optimization(
-        data_dict, ind_dict, price_arr, local_grid, start_cfg=1, debug_filters=True
-    )
-    
-    if grid_best_sharpe > best_sharpe_global:
-        best_sharpe_global = grid_best_sharpe
-        best_params_global = grid_best_params
-        all_results.extend(grid_results)
-        print(f"\n✅ Улучшено после локального grid search:")
+    if random_result:
+        best_sharpe_global = random_result['sharpe']
+        best_params_global = random_result['params']
+        all_results.append(random_result)
+        print(f"\n✅ Лучший результат после случайного поиска:")
         print(f"   Sharpe: {best_sharpe_global:.2f}")
         print(f"   Параметры: {best_params_global}")
     else:
-        all_results.extend(grid_results)
-
-# Считаем базовую сетку для сравнения (опционально)
-print("\n📊 ЭТАП 5: Сравнение с базовой сеткой параметров")
-base_grid_result, base_sharpe, base_results, _ = grid_search_optimization(
-    data_dict, ind_dict, price_arr, param_grid_base, start_cfg=1, debug_filters=False
-)
-
-if base_results:
-    all_results.extend(base_results)
-    if base_sharpe > best_sharpe_global:
-        best_sharpe_global = base_sharpe
-        best_params_global = base_grid_result
-        print(f"\n⚠️ Базовая сетка дала лучший результат: Sharpe={base_sharpe:.2f}")
-
-# ──────────────────────────────────────────────
-# 📊 ИТОГИ
-# ──────────────────────────────────────────────
-if all_results:
-    # Преобразуем результаты в DataFrame
-    df_res_list = []
-    for res in all_results:
-        if isinstance(res, dict) and 'Sharpe' in res:
-            df_res_list.append(res)
-        elif isinstance(res, dict) and 'sharpe' in res:
-            df_res_list.append({
-                'Sharpe': round(res['sharpe'], 2),
-                'Return': round(res['return'] * 100, 2),
-                'DD': round(res['dd'] * 100, 2),
-                'Trades': res['trades'],
-                'WinRate': round(res['win_rate'], 1),
-                'Params': res['params']
-            })
+        print("⚠️ Случайный поиск не дал результатов, используем базовую сетку")
     
-    if df_res_list:
-        df_res = pd.DataFrame(df_res_list).sort_values('Sharpe', ascending=False).reset_index(drop=True)
+    # Этап 2: Уточняющая оптимизация вокруг лучших найденных параметров
+    if best_params_global:
+        print("\n📊 ЭТАП 2: Уточняющая оптимизация")
+        refined_result = refine_optimization(data_dict, ind_dict, price_arr, best_params_global, param_ranges, n_iterations=100)
         
-        print("\n" + "=" * 60)
-        print("🏆 ТОП-10 РЕЗУЛЬТАТОВ АВТО-ОПТИМИЗАЦИИ")
-        print("=" * 60)
-        print(df_res.head(10).to_string(index=False))
+        if refined_result['sharpe'] > best_sharpe_global:
+            best_sharpe_global = refined_result['sharpe']
+            best_params_global = refined_result['params']
+            all_results.append(refined_result)
+            print(f"\n✅ Улучшено после уточнения:")
+            print(f"   Sharpe: {best_sharpe_global:.2f}")
+            print(f"   Параметры: {best_params_global}")
+
+    # Этап 3: Финальная тонкая настройка (еще более узкий диапазон)
+    if best_params_global:
+        print("\n📊 ЭТАП 3: Финальная тонкая настройка")
+        # Еще больше сужаем диапазоны (5% от исходного)
+        fine_ranges = {}
+        for key in best_params_global.keys():
+            center = best_params_global[key]
+            range_size = param_ranges[key][1] - param_ranges[key][0]
+            fine_range = range_size * 0.05
+            fine_ranges[key] = [
+                max(param_ranges[key][0], center - fine_range),
+                min(param_ranges[key][1], center + fine_range)
+            ]
         
-        if not df_res.empty:
-            best = df_res.iloc[0]
-            print(f"\n📌 ЛУЧШИЕ ПАРАМЕТРЫ:")
-            for k, v in best['Params'].items():
-                print(f"   {k}: {v}")
-            print(f"\n📈 Метрики:")
-            print(f"   Sharpe Ratio: {best['Sharpe']:.2f}")
-            print(f"   Total Return: {best['Return']:.2f}%")
-            print(f"   Max Drawdown: {best['DD']:.2f}%")
-            print(f"   Trades: {best['Trades']}")
-            print(f"   Win Rate: {best['WinRate']:.1f}%")
+        fine_result = refine_optimization(data_dict, ind_dict, price_arr, best_params_global, fine_ranges, n_iterations=50)
         
-        # Сохраняем все результаты
-        df_res.drop(columns='Params').to_csv('sngs_auto_optimization_full.csv', index=False, encoding='utf-8-sig')
-        print("\n💾 Полный отчет сохранен: sngs_auto_optimization_full.csv")
+        if fine_result['sharpe'] > best_sharpe_global:
+            best_sharpe_global = fine_result['sharpe']
+            best_params_global = fine_result['params']
+            all_results.append(fine_result)
+            print(f"\n✅ Улучшено после тонкой настройки:")
+            print(f"   Sharpe: {best_sharpe_global:.2f}")
+            print(f"   Параметры: {best_params_global}")
+
+    # Этап 4: Проверка окрестностей лучших параметров с помощью grid search
+    if best_params_global:
+        print("\n📊 ЭТАП 4: Локальный grid search вокруг лучших параметров")
         
-        # Сохраняем только топ-20
-        df_res.head(20).drop(columns='Params').to_csv('sngs_auto_optimization_top20.csv', index=False, encoding='utf-8-sig')
-        print("💾 Топ-20 сохранен: sngs_auto_optimization_top20.csv")
-else:
-    print("\n⚠️ Стратегия не совершила ни одной успешной сделки или не прошла фильтры.")
-    print("Возможные причины:")
-    print("1. Условия входа слишком строгие.")
-    print("2. Тренд 1D (EMA10 > EMA32) отсутствовал в выбранные даты.")
-    print("3. Диапазоны параметров требуют расширения.")
+        # Создаем узкую сетку вокруг лучших параметров
+        local_grid = {}
+        for key in best_params_global.keys():
+            center = best_params_global[key]
+            range_size = param_ranges[key][1] - param_ranges[key][0]
+            step = range_size * 0.15  # 15% шага
+            
+            values = [
+                max(param_ranges[key][0], round(center - step, 2)),
+                max(param_ranges[key][0], round(center, 2)),
+                min(param_ranges[key][1], round(center + step, 2))
+            ]
+            # Удаляем дубликаты
+            values = sorted(list(set(values)))
+            if len(values) < 2:
+                values = [center]
+            local_grid[key] = values
+        
+        print(f"   Локальная сетка: {local_grid}")
+        
+        grid_best_params, grid_best_sharpe, grid_results, total_cfgs = grid_search_optimization(
+            data_dict, ind_dict, price_arr, local_grid, start_cfg=1, debug_filters=True
+        )
+        
+        if grid_best_sharpe > best_sharpe_global:
+            best_sharpe_global = grid_best_sharpe
+            best_params_global = grid_best_params
+            all_results.extend(grid_results)
+            print(f"\n✅ Улучшено после локального grid search:")
+            print(f"   Sharpe: {best_sharpe_global:.2f}")
+            print(f"   Параметры: {best_params_global}")
+        else:
+            all_results.extend(grid_results)
+
+    # Считаем базовую сетку для сравнения (опционально)
+    print("\n📊 ЭТАП 5: Сравнение с базовой сеткой параметров")
+    base_grid_result, base_sharpe, base_results, _ = grid_search_optimization(
+        data_dict, ind_dict, price_arr, param_grid_base, start_cfg=1, debug_filters=False
+    )
+    
+    if base_results:
+        all_results.extend(base_results)
+        if base_sharpe > best_sharpe_global:
+            best_sharpe_global = base_sharpe
+            best_params_global = base_grid_result
+            print(f"\n⚠️ Базовая сетка дала лучший результат: Sharpe={base_sharpe:.2f}")
+
+    # ──────────────────────────────────────────────
+    # 📊 ИТОГИ
+    # ──────────────────────────────────────────────
+    if all_results:
+        # Преобразуем результаты в DataFrame
+        df_res_list = []
+        for res in all_results:
+            if isinstance(res, dict) and 'Sharpe' in res:
+                df_res_list.append(res)
+            elif isinstance(res, dict) and 'sharpe' in res:
+                df_res_list.append({
+                    'Sharpe': round(res['sharpe'], 2),
+                    'Return': round(res['return'] * 100, 2),
+                    'DD': round(res['dd'] * 100, 2),
+                    'Trades': res['trades'],
+                    'WinRate': round(res['win_rate'], 1),
+                    'Params': res['params']
+                })
+        
+        if df_res_list:
+            df_res = pd.DataFrame(df_res_list).sort_values('Sharpe', ascending=False).reset_index(drop=True)
+            
+            print("\n" + "=" * 60)
+            print("🏆 ТОП-10 РЕЗУЛЬТАТОВ АВТО-ОПТИМИЗАЦИИ")
+            print("=" * 60)
+            print(df_res.head(10).to_string(index=False))
+            
+            if not df_res.empty:
+                best = df_res.iloc[0]
+                print(f"\n📌 ЛУЧШИЕ ПАРАМЕТРЫ:")
+                for k, v in best['Params'].items():
+                    print(f"   {k}: {v}")
+                print(f"\n📈 Метрики:")
+                print(f"   Sharpe Ratio: {best['Sharpe']:.2f}")
+                print(f"   Total Return: {best['Return']:.2f}%")
+                print(f"   Max Drawdown: {best['DD']:.2f}%")
+                print(f"   Trades: {best['Trades']}")
+                print(f"   Win Rate: {best['WinRate']:.1f}%")
+            
+            # Сохраняем все результаты
+            df_res.drop(columns='Params').to_csv('sngs_auto_optimization_full.csv', index=False, encoding='utf-8-sig')
+            print("\n💾 Полный отчет сохранен: sngs_auto_optimization_full.csv")
+            
+            # Сохраняем только топ-20
+            df_res.head(20).drop(columns='Params').to_csv('sngs_auto_optimization_top20.csv', index=False, encoding='utf-8-sig')
+            print("💾 Топ-20 сохранен: sngs_auto_optimization_top20.csv")
+    else:
+        print("\n⚠️ Стратегия не совершила ни одной успешной сделки или не прошла фильтры.")
+        print("Возможные причины:")
+        print("1. Условия входа слишком строгие.")
+        print("2. Тренд 1D (EMA10 > EMA32) отсутствовал в выбранные даты.")
+        print("3. Диапазоны параметров требуют расширения.")
+
+
+if __name__ == '__main__':
+    # Для Windows обязательна эта конструкция при использовании multiprocessing
+    multiprocessing.freeze_support()
+    run_optimization()
