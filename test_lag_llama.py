@@ -79,7 +79,7 @@ print(f"🖥️ Используемое устройство: {DEVICE}")
 
 def load_data_tf(ticker_name: str, start: pd.Timestamp, end: pd.Timestamp) -> Optional[Dict[str, pd.DataFrame]]:
     """Загружает OHLCV данные с MOEX с чанкованием и кэшированием"""
-    tf_map = {'1D': '1d', '1H': '1h', '15T': '15min'}
+    tf_map = {'1D': '1d', '1H': '1h', '15T': '15m'}
 
     # Разбиваем период на чанки по 30 дней
     date_ranges = pd.date_range(start=start, end=end, freq='30D')
@@ -109,8 +109,6 @@ def load_data_tf(ticker_name: str, start: pd.Timestamp, end: pd.Timestamp) -> Op
             try:
                 # Для MOEX Algo период должен быть в формате: '1m', '5m', '10m', '15m', '30m', '1h', '1d'
                 period_param = tf_code
-                if tf_name == '15T':
-                    period_param = '15m'  # Правильный формат для MOEX
                 
                 df_chunk = ticker.candles(
                     start=chunk_start.strftime('%Y-%m-%d'),
@@ -227,35 +225,60 @@ def predict_with_lag_llama(
     Возвращает: (mean_prediction, quantiles_0.1_0.9)
     """
     from gluonts.dataset.field_names import FieldName
-    from gluonts.transform import InstanceSplitter, ExpectedNumInstanceSampler
+    from gluonts.transform import ExpectedNumInstanceSampler, InstanceSplitter
+    
+    # Убеждаемся, что у нас достаточно данных
+    if len(series) < context_length:
+        # Если данных мало, используем все доступные и уменьшаем context_length
+        actual_context = max(len(series), 10)  # минимум 10 точек
+        print(f"⚠️ Мало данных ({len(series)}), используем контекст {actual_context}")
+    else:
+        actual_context = context_length
+    
+    # Берём последние actual_context точек
+    series_short = series.tail(actual_context)
     
     # Подготовка данных для модели
     data_entry = {
-        "start": series.index[0],
-        "target": series.values,
+        "start": series_short.index[0],
+        "target": series_short.values.astype(float),
         "item_id": "SNGS"
     }
     
     # Создаем трансформацию для подготовки данных
-    # В новых версиях GluonTS используется instance_sampler вместо train_sampler
-    transformation = InstanceSplitter(
+    # Используем TestSplitter для инференса вместо InstanceSplitter с train_sampler
+    from gluonts.transform import TestSplitter
+    
+    transformation = TestSplitter(
         target_field=FieldName.TARGET,
         is_pad_field=FieldName.IS_PAD,
         start_field=FieldName.START,
         forecast_start_field=FieldName.FORECAST_START,
-        instance_sampler=ExpectedNumInstanceSampler(num_instances=1.0),
-        past_length=context_length,
+        past_length=actual_context,
         future_length=prediction_steps
     )
     
     # Применяем трансформацию
-    transformed_data = list(transformation.apply(iter([data_entry]), is_train=True))
+    transformed_data = list(transformation.apply(iter([data_entry])))
     
     if not transformed_data:
-        raise ValueError("Не удалось подготовить данные для прогнозирования")
-    
-    # Берём первый батч
-    input_tensor = torch.tensor(transformed_data[0]['past_target']).unsqueeze(0).float().to(DEVICE)
+        # Фолбэк: пробуем создать входные данные вручную
+        print("⚠️ TestSplitter не вернул данных, пробуем ручной формат...")
+        target_values = series_short.values.astype(float)
+        input_tensor = torch.tensor(target_values).unsqueeze(0).unsqueeze(-1).float().to(DEVICE)
+    else:
+        # Берём первый батч
+        batch = transformed_data[0]
+        if 'past_target' in batch:
+            input_tensor = torch.tensor(batch['past_target']).unsqueeze(0).float().to(DEVICE)
+        elif 'target' in batch:
+            # Альтернативный формат
+            target_data = batch['target']
+            if isinstance(target_data, dict) and 'data' in target_data:
+                target_data = target_data['data']
+            input_tensor = torch.tensor(target_data).unsqueeze(0).float().to(DEVICE)
+        else:
+            raise ValueError("Не удалось подготовить данные для прогнозирования")
     
     # Устанавливаем модель в режим eval
     model.eval()
