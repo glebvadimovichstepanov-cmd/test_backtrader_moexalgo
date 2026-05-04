@@ -109,7 +109,7 @@ def load_data_tf(ticker_name: str, start: pd.Timestamp, end: pd.Timestamp) -> Op
             try:
                 # Для MOEX Algo период должен быть в формате: '1m', '5m', '10m', '15m', '30m', '1h', '1d'
                 period_param = tf_code
-                if tf_name == '15min':
+                if tf_name == '15T':
                     period_param = '15m'  # Правильный формат для MOEX
                 
                 df_chunk = ticker.candles(
@@ -409,7 +409,7 @@ def main():
         # Прогноз Lag-Llama (на лог-возвратах)
         try:
             mean_pred, quantiles = predict_with_lag_llama(
-                estimator=estimator,
+                model=estimator,
                 series=series,
                 freq=tf_code,
                 prediction_steps=PREDICTION_STEPS,
