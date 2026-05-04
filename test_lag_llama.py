@@ -246,14 +246,15 @@ def predict_with_lag_llama(
     }
     
     # Создаем трансформацию для подготовки данных
-    # Используем TestSplitter для инференса вместо InstanceSplitter с train_sampler
-    from gluonts.transform import TestSplitter
+    # Используем InstanceSplitter с TestSplitSampler для инференса
+    from gluonts.transform import InstanceSplitter, TestSplitSampler
     
-    transformation = TestSplitter(
-        target_field=FieldName.TARGET,
-        is_pad_field=FieldName.IS_PAD,
-        start_field=FieldName.START,
-        forecast_start_field=FieldName.FORECAST_START,
+    transformation = InstanceSplitter(
+        target_field='target',
+        is_pad_field='is_pad',
+        start_field='start',
+        forecast_start_field='forecast_start',
+        instance_sampler=TestSplitSampler(min_past=actual_context),
         past_length=actual_context,
         future_length=prediction_steps
     )
