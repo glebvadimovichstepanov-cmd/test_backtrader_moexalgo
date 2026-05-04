@@ -31,13 +31,14 @@ try:
     from gluonts.dataset.pandas import PandasDataset
     from gluonts.torch.distributions.studentT import StudentTOutput
     from gluonts.torch.modules.loss import NegativeLogLikelihood
+    from gluonts.evaluation.backtest import make_evaluation_predictions
 except ImportError:
     print("❌ Lag-Llama не установлен. Выполните: pip install git+https://github.com/time-series-foundation-models/lag-llama.git")
     sys.exit(1)
 
 # Ваши импорты
 import moexalgo
-import vectorbt as vbt
+# vectorbt не нужен для отладки - исключено
 
 warnings.filterwarnings('ignore')
 pd.set_option('mode.chained_assignment', None)
@@ -221,18 +222,18 @@ def predict_with_lag_llama(
         context_length: int = 200
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Делает прогноз на prediction_steps шагов вперёд с использованием Lag-Llama.
+    Делает прогноз на prediction_steps шагов вперёд с использованием Lag-Llama
+    через правильный GluonTS Predictor API.
     Возвращает: (mean_prediction, quantiles_0.1_0.9)
     """
     from gluonts.dataset.field_names import FieldName
-    from gluonts.transform import ExpectedNumInstanceSampler, InstanceSplitter
+    from gluonts.dataset.common import ListDataset
     
-    # === РАСШИРЕННОЕ ЛОГИРОВАНИЕ: Начало подготовки данных ===
+    # === ЛОГИРОВАНИЕ: Начало подготовки данных ===
     print(f"\n🔍 [DEBUG] predict_with_lag_llama вызвана:")
     print(f"   - Длина входной серии: {len(series)}")
     print(f"   - Индекс начала: {series.index[0] if len(series) > 0 else 'N/A'}")
     print(f"   - Индекс конца: {series.index[-1] if len(series) > 0 else 'N/A'}")
-    print(f"   - Требуемый контекст (context_length): {context_length}")
     print(f"   - prediction_steps: {prediction_steps}")
     print(f"   - Частота (freq): {freq}")
     
@@ -241,271 +242,197 @@ def predict_with_lag_llama(
     inf_count = np.isinf(series).sum()
     print(f"   - NaN значений в серии: {nan_count}")
     print(f"   - Inf значений в серии: {inf_count}")
-    print(f"   - Первые 5 значений серии: {series.head().tolist()}")
-    print(f"   - Последние 5 значений серии: {series.tail().tolist()}")
-    # === КОНЕЦ БЛОКА ЛОГИРОВАНИЯ ===
     
     # Убеждаемся, что у нас достаточно данных
+    actual_context = min(len(series), context_length)
     if len(series) < context_length:
-        # Если данных мало, используем все доступные и уменьшаем context_length
-        actual_context = max(len(series), 10)  # минимум 10 точек
         print(f"⚠️ Мало данных ({len(series)}), используем контекст {actual_context}")
-    else:
-        actual_context = context_length
     
-    # Берём последние actual_context точек
+    # Берём последние actual_context точек для прогноза
     series_short = series.tail(actual_context)
     
     print(f"\n🔍 [DEBUG] После обрезки series_short:")
     print(f"   - Длина series_short: {len(series_short)}")
-    print(f"   - actual_context: {actual_context}")
     print(f"   - Первые 3 значения: {series_short.head(3).tolist() if len(series_short) >= 3 else series_short.tolist()}")
     print(f"   - Последние 3 значения: {series_short.tail(3).tolist() if len(series_short) >= 3 else series_short.tolist()}")
     
-    # Подготовка данных для модели
-    data_entry = {
-        "start": series_short.index[0],
-        "target": series_short.values.astype(float),
-        "item_id": "SNGS"
+    # Создаём GluonTS Dataset в правильном формате
+    # Важно: start должен быть pandas Period с правильной частотой
+    freq_map = {
+        '1d': 'D',
+        '1h': 'H',
+        '10min': 'T'
     }
+    gluonts_freq = freq_map.get(freq, 'D')
     
-    print(f"\n🔍 [DEBUG] data_entry создан:")
-    print(f"   - start: {data_entry['start']}")
-    print(f"   - target shape: {data_entry['target'].shape}")
-    print(f"   - target dtype: {data_entry['target'].dtype}")
-    print(f"   - item_id: {data_entry['item_id']}")
+    # Конвертируем индекс в Period для GluonTS
+    start_period = series_short.index[0].to_period(gluonts_freq) if hasattr(series_short.index[0], 'to_period') else pd.Period(series_short.index[0], freq=gluonts_freq)
     
-    # Создаем трансформацию для подготовки данных
-    # Используем InstanceSplitter с TestSplitSampler для инференса
-    from gluonts.transform import InstanceSplitter, TestSplitSampler
+    dataset = ListDataset([
+        {
+            "start": start_period,
+            "target": series_short.values.astype(float).tolist(),
+            "item_id": "SNGS"
+        }
+    ], freq=gluonts_freq)
     
-    transformation = InstanceSplitter(
-        target_field='target',
-        is_pad_field='is_pad',
-        start_field='start',
-        forecast_start_field='forecast_start',
-        instance_sampler=TestSplitSampler(min_past=actual_context),
-        past_length=actual_context,
-        future_length=prediction_steps
+    print(f"\n🔍 [DEBUG] GluonTS Dataset создан:")
+    print(f"   - start: {start_period}")
+    print(f"   - target length: {len(series_short.values)}")
+    print(f"   - freq: {gluonts_freq}")
+    
+    # Создаём Predictor из модели используя правильный API
+    from gluonts.torch import PyTorchPredictor
+    from gluonts.transform import Chain, InstanceSplitter, ExpectedNumInstanceSampler, TestSplitSampler
+    from gluonts.torch.util import copy_parameters
+    from gluonts.time_feature import time_features_from_frequency_str
+    
+    # Получаем параметры модели
+    prediction_length = prediction_steps
+    
+    # Получаем lags_seq и context_length из модели
+    if hasattr(model, 'hparams'):
+        hparams = model.hparams
+        context_length_model = getattr(hparams, 'context_length', context_length)
+        lags_seq = hparams.model_kwargs.get('lags_seq', None) if hasattr(hparams, 'model_kwargs') else None
+    else:
+        context_length_model = context_length
+        lags_seq = None
+    
+    # Создаём time features для данной частоты
+    try:
+        time_feat = time_features_from_frequency_str(gluonts_freq)
+    except Exception as e:
+        print(f"⚠️ Не удалось создать time features для freq={gluonts_freq}: {e}")
+        time_feat = []
+    
+    # Создаём трансформацию для подготовки данных (как это делает LagLlamaEstimator)
+    from gluonts.transform.feature import AddTimeFeatures, AddAgeFeature
+    from gluonts.transform import AsNumpyArray, ExpandDimArray
+    
+    # Стандартный набор трансформаций для Lag-Llama
+    transformation = Chain(
+        [
+            AsNumpyArray(field="target", expected_ndim=1),
+            ExpandDimArray(field="target", axis=0),
+            AddTimeFeatures(
+                start_field="start",
+                target_field="target",
+                output_field="time_feat",
+                time_features=time_feat,
+                pred_length=prediction_length,
+            ),
+            AddAgeFeature(
+                target_field="target",
+                output_field="age_feat",
+                pred_length=prediction_length,
+            ),
+            InstanceSplitter(
+                target_field="target",
+                is_pad_field="is_pad",
+                start_field="start",
+                forecast_start_field="forecast_start",
+                instance_sampler=TestSplitSampler(),
+                past_length=context_length_model,
+                future_length=prediction_length,
+                time_series_fields=["time_feat", "age_feat"],
+            ),
+        ]
     )
     
-    # Применяем трансформацию
-    transformed_data = list(transformation.apply(iter([data_entry])))
+    # Создаём predictor с правильными параметрами и трансформацией
+    predictor = PyTorchPredictor(
+        prediction_length=prediction_length,
+        input_names=["past_target", "past_observed_values", "past_time_feat", "past_age_feat"],
+        prediction_net=model.model,
+        batch_size=1,
+        input_transform=transformation,
+        output_transform=lambda x: x,
+        device=DEVICE,
+    )
     
-    print(f"\n🔍 [DEBUG] После применения InstanceSplitter:")
-    print(f"   - Количество элементов в transformed_data: {len(transformed_data)}")
+    # Используем make_evaluation_predictions для правильного форматирования данных
+    print(f"\n🔍 [DEBUG] Вызов make_evaluation_predictions...")
     
-    if not transformed_data:
-        # Фолбэк: пробуем создать входные данные вручную
-        print("⚠️ TestSplitter не вернул данных, пробуем ручной формат...")
+    try:
+        forecast_it, ts_it = make_evaluation_predictions(
+            dataset=dataset,
+            predictor=predictor,
+            num_samples=100,
+        )
         
-        # === РАСШИРЕННОЕ ЛОГИРОВАНИЕ: Детали о серии для ручного формата ===
-        print(f"\n🔍 [DEBUG] Ручной формат - информация о серии:")
-        print(f"   - Полная длина series: {len(series)}")
-        print(f"   - series.values.shape: {series.values.shape}")
-        print(f"   - series.values.dtype: {series.values.dtype}")
+        forecasts = list(forecast_it)
+        tss = list(ts_it)
         
-        # Берем всю доступную историю для обеспечения достаточного контекста
-        target_values = series.values.astype(float)
+        print(f"   - Количество forecasts: {len(forecasts)}")
+        print(f"   - Количество timeseries: {len(tss)}")
         
-        print(f"   - target_values после astype(float): shape={target_values.shape}, dtype={target_values.dtype}")
-        print(f"   - target_values первые 10: {target_values[:10] if len(target_values) >= 10 else target_values}")
-        print(f"   - target_values последние 10: {target_values[-10:] if len(target_values) >= 10 else target_values}")
+        if not forecasts:
+            raise ValueError("make_evaluation_predictions не вернул прогнозов")
         
-        # Обрезаем до максимальной длины контекста модели если данных слишком много
-        max_context = min(len(target_values), 4096)  # Ограничиваем разумным пределом
-        target_values = target_values[-max_context:]
+        forecast = forecasts[0]
         
-        print(f"   - max_context: {max_context}")
-        print(f"   - target_values после обрезки: shape={target_values.shape}")
-        
-        # Lag-Llama ожидает тензор формы [batch_size, seq_len, 1]
-        # Важно: не добавляем лишнее измерение, используем правильную форму
-        input_tensor = torch.tensor(target_values).unsqueeze(0).unsqueeze(-1).float().to(DEVICE)
-        # Формат: [1, seq_len, 1]
-        
-        print(f"\n🔍 [DEBUG] input_tensor (ручной формат):")
-        print(f"   - input_tensor.shape: {input_tensor.shape}")
-        print(f"   - input_tensor.dtype: {input_tensor.dtype}")
-        print(f"   - input_tensor.device: {input_tensor.device}")
-        print(f"   - input_tensor[:, :5, :]: {input_tensor[:, :5, :] if input_tensor.shape[1] >= 5 else input_tensor}")
-        print(f"   - input_tensor[:, -5:, :]: {input_tensor[:, -5:, :] if input_tensor.shape[1] >= 5 else input_tensor}")
-    else:
-        # Берём первый батч
-        batch = transformed_data[0]
-        print(f"\n🔍 [DEBUG] transformed_data[0] ключи: {batch.keys() if isinstance(batch, dict) else 'N/A'}")
-        
-        if 'past_target' in batch:
-            # past_target уже может быть в правильном формате
-            past_target = batch['past_target']
-            print(f"   - past_target type: {type(past_target)}")
-            if isinstance(past_target, dict) and 'data' in past_target:
-                past_target = past_target['data']
-                print(f"   - past_target['data'] extracted")
-            input_tensor = torch.tensor(past_target).unsqueeze(0).float().to(DEVICE)
-            # Убеждаемся, что форма [batch, seq_len, 1]
-            if input_tensor.dim() == 2:
-                input_tensor = input_tensor.unsqueeze(-1)
-                print(f"   - Добавлено измерение, новая форма: {input_tensor.shape}")
-        elif 'target' in batch:
-            # Альтернативный формат
-            target_data = batch['target']
-            print(f"   - target type: {type(target_data)}")
-            if isinstance(target_data, dict) and 'data' in target_data:
-                target_data = target_data['data']
-                print(f"   - target['data'] extracted")
-            input_tensor = torch.tensor(target_data).unsqueeze(0).float().to(DEVICE)
-            if input_tensor.dim() == 2:
-                input_tensor = input_tensor.unsqueeze(-1)
-                print(f"   - Добавлено измерение, новая форма: {input_tensor.shape}")
-        else:
-            print(f"   - Доступные ключи: {list(batch.keys()) if isinstance(batch, dict) else 'N/A'}")
-            raise ValueError("Не удалось подготовить данные для прогнозирования")
-    
-    print(f"\n🔍 [DEBUG] input_tensor перед проверкой лагов:")
-    print(f"   - input_tensor.shape: {input_tensor.shape}")
-    print(f"   - seq_len (input_tensor.shape[1]): {input_tensor.shape[1]}")
-    
-    # Проверяем, что длина последовательности достаточна для лагов модели
-    seq_len = input_tensor.shape[1]
-    max_lag = getattr(model.hparams, 'context_length', 1092)
-    
-    print(f"\n🔍 [DEBUG] Проверка лагов:")
-    print(f"   - seq_len: {seq_len}")
-    print(f"   - max_lag (из model.hparams.context_length): {max_lag}")
-    print(f"   - model.hparams: {model.hparams if hasattr(model, 'hparams') else 'N/A'}")
-    
-    if seq_len < max_lag:
-        print(f"⚠️ Длина последовательности ({seq_len}) меньше максимального лага ({max_lag}).")
-        print(f"   Пробуем использовать всю доступную историю серии...")
-        
-        # === РАСШИРЕННОЕ ЛОГИРОВАНИЕ: Попытка исправить длину ===
-        print(f"\n🔍 [DEBUG] Исправление длины последовательности:")
-        print(f"   - series.values.shape: {series.values.shape}")
-        print(f"   - Берём последние {max_lag} значений из {len(series.values)}")
-        
-        # Используем максимально возможную длину из оригинальной серии
-        target_values_full = series.values.astype(float)[-max_lag:]
-        
-        print(f"   - target_values_full.shape: {target_values_full.shape}")
-        print(f"   - target_values_full первые 5: {target_values_full[:5]}")
-        print(f"   - target_values_full последние 5: {target_values_full[-5:]}")
-        
-        input_tensor = torch.tensor(target_values_full).unsqueeze(0).unsqueeze(-1).float().to(DEVICE)
-        seq_len = input_tensor.shape[1]
-        
-        print(f"   - Новый input_tensor.shape: {input_tensor.shape}")
-        print(f"   - Новый seq_len: {seq_len}")
-        
-        if seq_len < max_lag:
-            print(f"⚠️ Всё ещё недостаточно данных ({seq_len} < {max_lag}). Модель может не работать корректно.")
-            print(f"   КРИТИЧЕСКОЕ ПРЕДУПРЕЖДЕНИЕ: Требуется минимум {max_lag} точек данных, но доступно только {seq_len}")
-    else:
-        print(f"✅ Длина последовательности ({seq_len}) достаточна для лага {max_lag}")
-    
-    # Устанавливаем модель в режим eval
-    model.eval()
-    model = model.to(DEVICE)
-    
-    print(f"\n🔍 [DEBUG] Перед вызовом model.model():")
-    print(f"   - input_tensor.shape: {input_tensor.shape}")
-    print(f"   - past_observed_values будет создана с shape: {input_tensor.shape}")
-    
-    # Генерируем прогноз
-    with torch.no_grad():
-        # Создаем тензор наблюдаемых значений (все значения наблюдаемы)
-        past_observed_values = torch.ones_like(input_tensor).to(DEVICE)
-        
-        print(f"   - past_observed_values.shape: {past_observed_values.shape}")
-        
-        # === КРИТИЧЕСКОЕ ЛОГИРОВАНИЕ: Проверяем lags_seq модели ===
-        if hasattr(model, 'hparams') and hasattr(model.hparams, 'model_kwargs'):
-            lags_seq = model.hparams.model_kwargs.get('lags_seq', [])
-            if lags_seq:
-                max_lag_in_seq = max(lags_seq)
-                print(f"\n🔍 [DEBUG] КРИТИЧЕСКАЯ ИНФОРМАЦИЯ О ЛАГАХ:")
-                print(f"   - lags_seq (первые 20): {lags_seq[:20]}")
-                print(f"   - lags_seq (последние 10): {lags_seq[-10:]}")
-                print(f"   - Максимальный лаг в lags_seq: {max_lag_in_seq}")
-                print(f"   - Длина input_tensor[0]: {input_tensor.shape[1]}")
-                if max_lag_in_seq > input_tensor.shape[1]:
-                    print(f"   ⚠️ ПРОБЛЕМА: max_lag ({max_lag_in_seq}) > длины последовательности ({input_tensor.shape[1]})")
-                    print(f"   → Необходимо передать минимум {max_lag_in_seq} точек данных!")
-        
-        # Проверяем, не сжался ли тензор где-то
-        print(f"\n🔍 [DEBUG] Финальная проверка перед model.model():")
-        print(f"   - input_tensor.isnan().sum(): {input_tensor.isnan().sum().item()}")
-        print(f"   - input_tensor.isinf().sum(): {input_tensor.isinf().sum().item()}")
-        print(f"   - input_tensor[:, -10:, :] (последние 10 значений): {input_tensor[:, -10:, :].squeeze()}")
-        
-        # === НОВОЕ: Пробуем вручную создать time_feat и передать их ===
-        print(f"\n🔍 [DEBUG] Попытка создания time_feat вручную...")
-        
-        # Получаем частоту из freq строки
-        freq_mapping = {
-            '1d': 'D',
-            '1h': 'H', 
-            '10min': 'T'
-        }
-        pandas_freq = freq_mapping.get(freq, 'D')
-        print(f"   - pandas_freq: {pandas_freq}")
-        
-        # Создаем dummy time index для генерации time features
-        dummy_index = pd.date_range(start='2020-01-01', periods=input_tensor.shape[1], freq=pandas_freq)
-        print(f"   - dummy_index: {dummy_index[0]} ... {dummy_index[-1]}")
-        
-        # Генерируем time features вручную
-        from gluonts.time_feature import time_features_from_frequency_str
-        try:
-            time_features = time_features_from_frequency_str(pandas_freq)
-            print(f"   - time_features функции: {len(time_features)} шт.")
-            
-            # Создаем time_feat tensor
-            time_feat_list = []
-            for tf in time_features:
-                time_feat_list.append(tf(dummy_index))
-            time_feat_tensor = torch.tensor(np.vstack(time_feat_list), dtype=torch.float32).unsqueeze(0).permute(0, 2, 1)
-            print(f"   - time_feat_tensor.shape: {time_feat_tensor.shape}")
-        except Exception as e:
-            print(f"   ⚠️ Ошибка при создании time_feat: {e}")
-            time_feat_tensor = None
-        
-        print(f"   - Вызов model.model(input_tensor, past_observed_values=past_observed_values)...")
-        
-        # Получаем параметры распределения от модели
-        # Пробуем вызвать с явными параметрами
-        try:
-            params = model.model(input_tensor, past_observed_values=past_observed_values)
-        except AssertionError as e:
-            print(f"\n❌ [CRITICAL] AssertionError при вызове модели: {e}")
-            print(f"   Это означает, что модель внутри себя сжала последовательность до 1 элемента.")
-            print(f"   Возможная причина: неправильное масштабирование или отсутствие time_feat.")
-            raise
-        
-        print(f"   - params получены: {type(params)}")
-        
-        # Используем StudentT распределение для семплирования
-        distr_output = model.distr_output
-        distr = distr_output.distribution(*params, scale=1.0)
-        
-        print(f"   - distr создан: {type(distr)}")
-        
-        # Семплируем прогнозы
-        samples = distr.sample(sample_shape=(100,))  # 100 семплов
-        
-        print(f"   - samples.shape: {samples.shape}")
-        
-        # Вычисляем среднее и квантили
-        mean_pred = samples.mean(dim=0).cpu().numpy()
-        q_low = samples.quantile(0.1, dim=0).cpu().numpy()
-        q_high = samples.quantile(0.9, dim=0).cpu().numpy()
+        # Извлекаем среднее и квантили из forecast
+        mean_pred = forecast.mean
+        q_low = forecast.quantile(0.1)
+        q_high = forecast.quantile(0.9)
         
         print(f"   - mean_pred.shape: {mean_pred.shape}")
-        print(f"   - q_low.shape: {q_low.shape}")
-        print(f"   - q_high.shape: {q_high.shape}")
-    
-    print(f"\n🔍 [DEBUG] predict_with_lag_llama завершена успешно")
-    return mean_pred, (q_low, q_high)
+        print(f"   - q_low: {q_low}")
+        print(f"   - q_high: {q_high}")
+        
+        return mean_pred, (q_low, q_high)
+        
+    except Exception as e:
+        print(f"❌ Ошибка при использовании make_evaluation_predictions: {e}")
+        print(f"   Пробуем альтернативный подход с Predictor.from_estimator...")
+        
+        # Альтернативный подход: создаём predictor через estimator
+        try:
+            from lag_llama.gluon.estimator import LagLlamaEstimator
+            
+            # Получаем параметры из загруженной модели
+            hparams = model.hparams
+            
+            # Создаём новый estimator с теми же параметрами
+            estimator = LagLlamaEstimator(
+                context_length=hparams.context_length if hasattr(hparams, 'context_length') else context_length,
+                prediction_length=prediction_steps,
+                input_size=1,
+                n_layer=hparams.model_kwargs.get('n_layer', 8) if hasattr(hparams, 'model_kwargs') else 8,
+                n_embd_per_head=hparams.model_kwargs.get('n_embd_per_head', 16) if hasattr(hparams, 'model_kwargs') else 16,
+                n_head=hparams.model_kwargs.get('n_head', 9) if hasattr(hparams, 'model_kwargs') else 9,
+                lags_seq=hparams.model_kwargs.get('lags_seq', None) if hasattr(hparams, 'model_kwargs') else None,
+                scaling=hparams.model_kwargs.get('scaling', 'robust') if hasattr(hparams, 'model_kwargs') else 'robust',
+                distr_output=hparams.model_kwargs.get('distr_output', StudentTOutput()) if hasattr(hparams, 'model_kwargs') else StudentTOutput(),
+                num_parallel_samples=100,
+                device=DEVICE,
+            )
+            
+            # Обучаем predictor (но не обучаем модель, просто создаём inference predictor)
+            predictor = estimator.train_from_dataset(dataset, num_batches_per_epoch=1)
+            
+            forecast_it, ts_it = make_evaluation_predictions(
+                dataset=dataset,
+                predictor=predictor,
+                num_samples=100,
+            )
+            
+            forecasts = list(forecast_it)
+            
+            if not forecasts:
+                raise ValueError("Не удалось получить прогнозы")
+            
+            forecast = forecasts[0]
+            mean_pred = forecast.mean
+            q_low = forecast.quantile(0.1)
+            q_high = forecast.quantile(0.9)
+            
+            return mean_pred, (q_low, q_high)
+            
+        except Exception as e2:
+            print(f"❌ Альтернативный подход также не сработал: {e2}")
+            raise
 
 
 # ======================== 🤖 ИНТЕГРАЦИЯ С ЛОКАЛЬНЫМ LLM ========================
