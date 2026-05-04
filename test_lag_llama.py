@@ -226,22 +226,29 @@ def predict_with_lag_llama(
     через правильный GluonTS Predictor API.
     Возвращает: (mean_prediction, quantiles_0.1_0.9)
     """
-    from gluonts.dataset.field_names import FieldName
     from gluonts.dataset.common import ListDataset
+    from gluonts.torch.distributions.studentT import StudentTOutput
+    from gluonts.torch import PyTorchPredictor
+    from gluonts.transform import Chain, InstanceSplitter, TestSplitSampler, ExpectedNumInstanceSampler
+    from gluonts.transform.feature import AddTimeFeatures, AddAgeFeature
+    from gluonts.transform import AsNumpyArray, ExpandDimArray
+    from gluonts.time_feature import time_features_from_frequency_str
+    
+    # Добавляем StudentTOutput в безопасные глобальные объекты для torch.load
+    torch.serialization.add_safe_globals([StudentTOutput])
     
     # === ЛОГИРОВАНИЕ: Начало подготовки данных ===
     print(f"\n🔍 [DEBUG] predict_with_lag_llama вызвана:")
     print(f"   - Длина входной серии: {len(series)}")
-    print(f"   - Индекс начала: {series.index[0] if len(series) > 0 else 'N/A'}")
-    print(f"   - Индекс конца: {series.index[-1] if len(series) > 0 else 'N/A'}")
     print(f"   - prediction_steps: {prediction_steps}")
     print(f"   - Частота (freq): {freq}")
     
     # Проверяем наличие NaN или inf
     nan_count = series.isna().sum()
     inf_count = np.isinf(series).sum()
-    print(f"   - NaN значений в серии: {nan_count}")
-    print(f"   - Inf значений в серии: {inf_count}")
+    if nan_count > 0 or inf_count > 0:
+        print(f"   ⚠️ NaN: {nan_count}, Inf: {inf_count}")
+        series = series.replace([np.inf, -np.inf], np.nan).ffill().bfill()
     
     # Убеждаемся, что у нас достаточно данных
     actual_context = min(len(series), context_length)
@@ -253,19 +260,11 @@ def predict_with_lag_llama(
     
     print(f"\n🔍 [DEBUG] После обрезки series_short:")
     print(f"   - Длина series_short: {len(series_short)}")
-    print(f"   - Первые 3 значения: {series_short.head(3).tolist() if len(series_short) >= 3 else series_short.tolist()}")
-    print(f"   - Последние 3 значения: {series_short.tail(3).tolist() if len(series_short) >= 3 else series_short.tolist()}")
     
     # Создаём GluonTS Dataset в правильном формате
-    # Важно: start должен быть pandas Period с правильной частотой
-    freq_map = {
-        '1d': 'D',
-        '1h': 'H',
-        '10min': 'T'
-    }
+    freq_map = {'1d': 'D', '1h': 'H', '10min': 'T'}
     gluonts_freq = freq_map.get(freq, 'D')
     
-    # Конвертируем индекс в Period для GluonTS
     start_period = series_short.index[0].to_period(gluonts_freq) if hasattr(series_short.index[0], 'to_period') else pd.Period(series_short.index[0], freq=gluonts_freq)
     
     dataset = ListDataset([
@@ -276,41 +275,22 @@ def predict_with_lag_llama(
         }
     ], freq=gluonts_freq)
     
-    print(f"\n🔍 [DEBUG] GluonTS Dataset создан:")
-    print(f"   - start: {start_period}")
-    print(f"   - target length: {len(series_short.values)}")
-    print(f"   - freq: {gluonts_freq}")
+    # Получаем параметры из загруженной модели
+    hparams = model.hparams
+    model_kwargs = hparams.model_kwargs if hasattr(hparams, 'model_kwargs') else {}
     
-    # Создаём Predictor из модели используя правильный API
-    from gluonts.torch import PyTorchPredictor
-    from gluonts.transform import Chain, InstanceSplitter, ExpectedNumInstanceSampler, TestSplitSampler
-    from gluonts.torch.util import copy_parameters
-    from gluonts.time_feature import time_features_from_frequency_str
+    context_length_model = hparams.context_length if hasattr(hparams, 'context_length') else context_length
+    time_feat_flag = model_kwargs.get('time_feat', False)
     
-    # Получаем параметры модели
-    prediction_length = prediction_steps
+    # Создаём time features если нужно
+    time_feat = []
+    if time_feat_flag:
+        try:
+            time_feat = time_features_from_frequency_str(gluonts_freq)
+        except Exception:
+            time_feat_flag = False
     
-    # Получаем lags_seq и context_length из модели
-    if hasattr(model, 'hparams'):
-        hparams = model.hparams
-        context_length_model = getattr(hparams, 'context_length', context_length)
-        lags_seq = hparams.model_kwargs.get('lags_seq', None) if hasattr(hparams, 'model_kwargs') else None
-    else:
-        context_length_model = context_length
-        lags_seq = None
-    
-    # Создаём time features для данной частоты
-    try:
-        time_feat = time_features_from_frequency_str(gluonts_freq)
-    except Exception as e:
-        print(f"⚠️ Не удалось создать time features для freq={gluonts_freq}: {e}")
-        time_feat = []
-    
-    # Создаём трансформацию для подготовки данных (как это делает LagLlamaEstimator)
-    from gluonts.transform.feature import AddTimeFeatures, AddAgeFeature
-    from gluonts.transform import AsNumpyArray, ExpandDimArray
-    
-    # Стандартный набор трансформаций для Lag-Llama
+    # Создаём трансформацию для подготовки данных
     transformation = Chain(
         [
             AsNumpyArray(field="target", expected_ndim=1),
@@ -320,12 +300,12 @@ def predict_with_lag_llama(
                 target_field="target",
                 output_field="time_feat",
                 time_features=time_feat,
-                pred_length=prediction_length,
-            ),
+                pred_length=prediction_steps,
+            ) if time_feat_flag else AsNumpyArray(field="target", expected_ndim=1),
             AddAgeFeature(
                 target_field="target",
                 output_field="age_feat",
-                pred_length=prediction_length,
+                pred_length=prediction_steps,
             ),
             InstanceSplitter(
                 target_field="target",
@@ -334,105 +314,55 @@ def predict_with_lag_llama(
                 forecast_start_field="forecast_start",
                 instance_sampler=TestSplitSampler(),
                 past_length=context_length_model,
-                future_length=prediction_length,
-                time_series_fields=["time_feat", "age_feat"],
+                future_length=prediction_steps,
+                time_series_fields=["time_feat", "age_feat"] if time_feat_flag else ["age_feat"],
             ),
         ]
     )
     
-    # Создаём predictor с правильными параметрами и трансформацией
+    # Создаём predictor с правильными input_names
+    input_names = ["past_target", "past_observed_values", "past_age_feat"]
+    if time_feat_flag:
+        input_names.insert(2, "past_time_feat")
+    
+    print(f"\n🔍 [DEBUG] Создание PyTorchPredictor...")
+    print(f"   - input_names: {input_names}")
+    print(f"   - context_length: {context_length_model}")
+    
     predictor = PyTorchPredictor(
-        prediction_length=prediction_length,
-        input_names=["past_target", "past_observed_values", "past_time_feat", "past_age_feat"],
+        prediction_length=prediction_steps,
+        input_names=input_names,
         prediction_net=model.model,
         batch_size=1,
         input_transform=transformation,
         output_transform=lambda x: x,
-        device=DEVICE,
+        device=torch.device(DEVICE),
     )
     
     # Используем make_evaluation_predictions для правильного форматирования данных
     print(f"\n🔍 [DEBUG] Вызов make_evaluation_predictions...")
     
-    try:
-        forecast_it, ts_it = make_evaluation_predictions(
-            dataset=dataset,
-            predictor=predictor,
-            num_samples=100,
-        )
-        
-        forecasts = list(forecast_it)
-        tss = list(ts_it)
-        
-        print(f"   - Количество forecasts: {len(forecasts)}")
-        print(f"   - Количество timeseries: {len(tss)}")
-        
-        if not forecasts:
-            raise ValueError("make_evaluation_predictions не вернул прогнозов")
-        
-        forecast = forecasts[0]
-        
-        # Извлекаем среднее и квантили из forecast
-        mean_pred = forecast.mean
-        q_low = forecast.quantile(0.1)
-        q_high = forecast.quantile(0.9)
-        
-        print(f"   - mean_pred.shape: {mean_pred.shape}")
-        print(f"   - q_low: {q_low}")
-        print(f"   - q_high: {q_high}")
-        
-        return mean_pred, (q_low, q_high)
-        
-    except Exception as e:
-        print(f"❌ Ошибка при использовании make_evaluation_predictions: {e}")
-        print(f"   Пробуем альтернативный подход с Predictor.from_estimator...")
-        
-        # Альтернативный подход: создаём predictor через estimator
-        try:
-            from lag_llama.gluon.estimator import LagLlamaEstimator
-            
-            # Получаем параметры из загруженной модели
-            hparams = model.hparams
-            
-            # Создаём новый estimator с теми же параметрами
-            estimator = LagLlamaEstimator(
-                context_length=hparams.context_length if hasattr(hparams, 'context_length') else context_length,
-                prediction_length=prediction_steps,
-                input_size=1,
-                n_layer=hparams.model_kwargs.get('n_layer', 8) if hasattr(hparams, 'model_kwargs') else 8,
-                n_embd_per_head=hparams.model_kwargs.get('n_embd_per_head', 16) if hasattr(hparams, 'model_kwargs') else 16,
-                n_head=hparams.model_kwargs.get('n_head', 9) if hasattr(hparams, 'model_kwargs') else 9,
-                lags_seq=hparams.model_kwargs.get('lags_seq', None) if hasattr(hparams, 'model_kwargs') else None,
-                scaling=hparams.model_kwargs.get('scaling', 'robust') if hasattr(hparams, 'model_kwargs') else 'robust',
-                distr_output=hparams.model_kwargs.get('distr_output', StudentTOutput()) if hasattr(hparams, 'model_kwargs') else StudentTOutput(),
-                num_parallel_samples=100,
-                device=DEVICE,
-            )
-            
-            # Обучаем predictor (но не обучаем модель, просто создаём inference predictor)
-            predictor = estimator.train_from_dataset(dataset, num_batches_per_epoch=1)
-            
-            forecast_it, ts_it = make_evaluation_predictions(
-                dataset=dataset,
-                predictor=predictor,
-                num_samples=100,
-            )
-            
-            forecasts = list(forecast_it)
-            
-            if not forecasts:
-                raise ValueError("Не удалось получить прогнозы")
-            
-            forecast = forecasts[0]
-            mean_pred = forecast.mean
-            q_low = forecast.quantile(0.1)
-            q_high = forecast.quantile(0.9)
-            
-            return mean_pred, (q_low, q_high)
-            
-        except Exception as e2:
-            print(f"❌ Альтернативный подход также не сработал: {e2}")
-            raise
+    forecast_it, ts_it = make_evaluation_predictions(
+        dataset=dataset,
+        predictor=predictor,
+        num_samples=100,
+    )
+    
+    forecasts = list(forecast_it)
+    
+    if not forecasts:
+        raise ValueError("make_evaluation_predictions не вернул прогнозов")
+    
+    forecast = forecasts[0]
+    
+    # Извлекаем среднее и квантили из forecast
+    mean_pred = forecast.mean
+    q_low = forecast.quantile(0.1)
+    q_high = forecast.quantile(0.9)
+    
+    print(f"   ✅ Прогноз получен: mean_pred.shape={mean_pred.shape}")
+    
+    return mean_pred, (q_low, q_high)
 
 
 # ======================== 🤖 ИНТЕГРАЦИЯ С ЛОКАЛЬНЫМ LLM ========================
