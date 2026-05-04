@@ -287,8 +287,11 @@ def predict_with_lag_llama(
     
     # Генерируем прогноз
     with torch.no_grad():
+        # Создаем тензор наблюдаемых значений (все значения наблюдаемы)
+        past_observed_values = torch.ones_like(input_tensor).to(DEVICE)
+        
         # Получаем параметры распределения от модели
-        params = model.model(input_tensor)
+        params = model.model(input_tensor, past_observed_values=past_observed_values)
         
         # Используем StudentT распределение для семплирования
         distr_output = model.distr_output
