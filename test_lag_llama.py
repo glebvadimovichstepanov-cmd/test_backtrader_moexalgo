@@ -27,7 +27,10 @@ from tqdm import tqdm
 # Lag-Llama imports
 try:
     from lag_llama.gluon.estimator import LagLlamaEstimator
+    from lag_llama.gluon.lightning_module import LagLlamaLightningModule
     from gluonts.dataset.pandas import PandasDataset
+    from gluonts.torch.distributions.studentT import StudentTOutput
+    from gluonts.torch.modules.loss import NegativeLogLikelihood
 except ImportError:
     print("❌ Lag-Llama не установлен. Выполните: pip install git+https://github.com/time-series-foundation-models/lag-llama.git")
     sys.exit(1)
@@ -104,10 +107,15 @@ def load_data_tf(ticker_name: str, start: pd.Timestamp, end: pd.Timestamp) -> Op
 
         for chunk_start, chunk_end in ranges:
             try:
+                # Для MOEX Algo период должен быть в формате: '1m', '5m', '10m', '15m', '30m', '1h', '1d'
+                period_param = tf_code
+                if tf_name == '15min':
+                    period_param = '15m'  # Правильный формат для MOEX
+                
                 df_chunk = ticker.candles(
                     start=chunk_start.strftime('%Y-%m-%d'),
                     end=chunk_end.strftime('%Y-%m-%d'),
-                    period=tf_code
+                    period=period_param
                 )
                 if df_chunk is not None and not df_chunk.empty:
                     # Нормализация колонок
@@ -184,43 +192,94 @@ def load_lag_llama_model(model_path: Optional[str] = None):
     """Загружает предобученную модель Lag-Llama"""
     print(f"🤖 Загрузка Lag-Llama модели на {DEVICE}...")
 
-    # Lag-Llama использует хаб моделей
+    # Добавляем необходимые классы в безопасные глобальные объекты для torch.load
+    torch.serialization.add_safe_globals([StudentTOutput, NegativeLogLikelihood])
+    
+    # Lag-Llama использует хаб моделей HuggingFace
     if model_path is None:
-        model_path = "lag-llama"  # автозагрузка с HuggingFace
-
-    estimator = LagLlamaEstimator.from_pretrained(model_path)
-    return estimator
+        try:
+            from huggingface_hub import hf_hub_download
+            checkpoint_path = hf_hub_download(
+                repo_id="time-series-foundation-models/Lag-Llama",
+                filename="lag-llama.ckpt",
+                repo_type="model"
+            )
+            print(f"📥 Модель загружена с HuggingFace: {checkpoint_path}")
+        except Exception as e:
+            print(f"❌ Ошибка загрузки модели с HuggingFace: {e}")
+            raise
+    
+    # Загружаем модель из чекпоинта
+    model = LagLlamaLightningModule.load_from_checkpoint(checkpoint_path, map_location=DEVICE)
+    print("✅ Модель успешно загружена!")
+    return model
 
 
 def predict_with_lag_llama(
-        estimator,
+        model,
         series: pd.Series,
         freq: str,
         prediction_steps: int,
         context_length: int = 200
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Делает прогноз на prediction_steps шагов вперёд.
+    Делает прогноз на prediction_steps шагов вперёд с использованием Lag-Llama.
     Возвращает: (mean_prediction, quantiles_0.1_0.9)
     """
-    # Подготовка датасета
-    dataset = create_gluonts_dataset(series, freq)
-
-    # Прогнозирование
-    predictor = estimator.create_predictor(
-        device=DEVICE,
-        context_length=context_length,
-        prediction_length=prediction_steps
+    from gluonts.dataset.field_names import FieldName
+    from gluonts.itertools import batcher
+    from gluonts.transform import InstanceSplitter, ExpectedNumInstanceSampler
+    
+    # Подготовка данных для модели
+    data_entry = {
+        "start": series.index[0],
+        "target": series.values,
+        "item_id": "SNGS"
+    }
+    
+    # Создаем трансформацию для подготовки данных
+    transformation = InstanceSplitter(
+        target_field=FieldName.TARGET,
+        is_pad_field=FieldName.IS_PAD,
+        start_field=FieldName.START,
+        forecast_start_field=FieldName.FORECAST_START,
+        train_sampler=ExpectedNumInstanceSampler(num_instances=1.0),
+        past_length=context_length,
+        future_length=prediction_steps,
+        leading_pad_labels=[prediction_steps]
     )
-
-    forecasts = list(predictor.predict(dataset, num_samples=100))
-
-    # Извлечение результатов
-    forecast = forecasts[0]
-    mean_pred = forecast.mean
-    quantiles = forecast.quantile(0.1), forecast.quantile(0.9)
-
-    return mean_pred, quantiles
+    
+    # Применяем трансформацию
+    transformed_data = list(transformation.apply(iter([data_entry]), is_train=True))
+    
+    if not transformed_data:
+        raise ValueError("Не удалось подготовить данные для прогнозирования")
+    
+    # Берём первый батч
+    input_tensor = torch.tensor(transformed_data[0]['past_target']).unsqueeze(0).float().to(DEVICE)
+    
+    # Устанавливаем модель в режим eval
+    model.eval()
+    model = model.to(DEVICE)
+    
+    # Генерируем прогноз
+    with torch.no_grad():
+        # Получаем параметры распределения от модели
+        params = model.model(input_tensor)
+        
+        # Используем StudentT распределение для семплирования
+        distr_output = model.distr_output
+        distr = distr_output.distribution(*params, scale=1.0)
+        
+        # Семплируем прогнозы
+        samples = distr.sample(sample_shape=(100,))  # 100 семплов
+        
+        # Вычисляем среднее и квантили
+        mean_pred = samples.mean(dim=0).cpu().numpy()
+        q_low = samples.quantile(0.1, dim=0).cpu().numpy()
+        q_high = samples.quantile(0.9, dim=0).cpu().numpy()
+    
+    return mean_pred, (q_low, q_high)
 
 
 # ======================== 🤖 ИНТЕГРАЦИЯ С ЛОКАЛЬНЫМ LLM ========================
