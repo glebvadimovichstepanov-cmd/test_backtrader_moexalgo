@@ -266,7 +266,7 @@ def predict_with_lag_llama(
         # Фолбэк: пробуем создать входные данные вручную
         print("⚠️ TestSplitter не вернул данных, пробуем ручной формат...")
         # Берем всю доступную историю для обеспечения достаточного контекста
-        target_values = series_long.values.astype(float)
+        target_values = series.values.astype(float)
         
         # Обрезаем до максимальной длины контекста модели если данных слишком много
         max_context = min(len(target_values), 4096)  # Ограничиваем разумным пределом
