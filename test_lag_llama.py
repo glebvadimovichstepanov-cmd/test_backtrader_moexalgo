@@ -438,10 +438,49 @@ def predict_with_lag_llama(
         print(f"   - input_tensor.isinf().sum(): {input_tensor.isinf().sum().item()}")
         print(f"   - input_tensor[:, -10:, :] (последние 10 значений): {input_tensor[:, -10:, :].squeeze()}")
         
+        # === НОВОЕ: Пробуем вручную создать time_feat и передать их ===
+        print(f"\n🔍 [DEBUG] Попытка создания time_feat вручную...")
+        
+        # Получаем частоту из freq строки
+        freq_mapping = {
+            '1d': 'D',
+            '1h': 'H', 
+            '10min': 'T'
+        }
+        pandas_freq = freq_mapping.get(freq, 'D')
+        print(f"   - pandas_freq: {pandas_freq}")
+        
+        # Создаем dummy time index для генерации time features
+        dummy_index = pd.date_range(start='2020-01-01', periods=input_tensor.shape[1], freq=pandas_freq)
+        print(f"   - dummy_index: {dummy_index[0]} ... {dummy_index[-1]}")
+        
+        # Генерируем time features вручную
+        from gluonts.time_feature import time_features_from_frequency_str
+        try:
+            time_features = time_features_from_frequency_str(pandas_freq)
+            print(f"   - time_features функции: {len(time_features)} шт.")
+            
+            # Создаем time_feat tensor
+            time_feat_list = []
+            for tf in time_features:
+                time_feat_list.append(tf(dummy_index))
+            time_feat_tensor = torch.tensor(np.vstack(time_feat_list), dtype=torch.float32).unsqueeze(0).permute(0, 2, 1)
+            print(f"   - time_feat_tensor.shape: {time_feat_tensor.shape}")
+        except Exception as e:
+            print(f"   ⚠️ Ошибка при создании time_feat: {e}")
+            time_feat_tensor = None
+        
         print(f"   - Вызов model.model(input_tensor, past_observed_values=past_observed_values)...")
         
         # Получаем параметры распределения от модели
-        params = model.model(input_tensor, past_observed_values=past_observed_values)
+        # Пробуем вызвать с явными параметрами
+        try:
+            params = model.model(input_tensor, past_observed_values=past_observed_values)
+        except AssertionError as e:
+            print(f"\n❌ [CRITICAL] AssertionError при вызове модели: {e}")
+            print(f"   Это означает, что модель внутри себя сжала последовательность до 1 элемента.")
+            print(f"   Возможная причина: неправильное масштабирование или отсутствие time_feat.")
+            raise
         
         print(f"   - params получены: {type(params)}")
         
