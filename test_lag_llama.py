@@ -265,7 +265,13 @@ def predict_with_lag_llama(
     if not transformed_data:
         # Фолбэк: пробуем создать входные данные вручную
         print("⚠️ TestSplitter не вернул данных, пробуем ручной формат...")
-        target_values = series_short.values.astype(float)
+        # Берем всю доступную историю для обеспечения достаточного контекста
+        target_values = series_long.values.astype(float)
+        
+        # Обрезаем до максимальной длины контекста модели если данных слишком много
+        max_context = min(len(target_values), 4096)  # Ограничиваем разумным пределом
+        target_values = target_values[-max_context:]
+        
         input_tensor = torch.tensor(target_values).unsqueeze(0).unsqueeze(-1).float().to(DEVICE)
     else:
         # Берём первый батч
