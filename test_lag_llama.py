@@ -272,20 +272,46 @@ def predict_with_lag_llama(
         max_context = min(len(target_values), 4096)  # Ограничиваем разумным пределом
         target_values = target_values[-max_context:]
         
+        # Lag-Llama ожидает тензор формы [batch_size, seq_len, 1]
+        # Важно: не добавляем лишнее измерение, используем правильную форму
         input_tensor = torch.tensor(target_values).unsqueeze(0).unsqueeze(-1).float().to(DEVICE)
+        # Формат: [1, seq_len, 1]
     else:
         # Берём первый батч
         batch = transformed_data[0]
         if 'past_target' in batch:
-            input_tensor = torch.tensor(batch['past_target']).unsqueeze(0).float().to(DEVICE)
+            # past_target уже может быть в правильном формате
+            past_target = batch['past_target']
+            if isinstance(past_target, dict) and 'data' in past_target:
+                past_target = past_target['data']
+            input_tensor = torch.tensor(past_target).unsqueeze(0).float().to(DEVICE)
+            # Убеждаемся, что форма [batch, seq_len, 1]
+            if input_tensor.dim() == 2:
+                input_tensor = input_tensor.unsqueeze(-1)
         elif 'target' in batch:
             # Альтернативный формат
             target_data = batch['target']
             if isinstance(target_data, dict) and 'data' in target_data:
                 target_data = target_data['data']
             input_tensor = torch.tensor(target_data).unsqueeze(0).float().to(DEVICE)
+            if input_tensor.dim() == 2:
+                input_tensor = input_tensor.unsqueeze(-1)
         else:
             raise ValueError("Не удалось подготовить данные для прогнозирования")
+    
+    # Проверяем, что длина последовательности достаточна для лагов модели
+    seq_len = input_tensor.shape[1]
+    max_lag = getattr(model.hparams, 'context_length', 1092)
+    
+    if seq_len < max_lag:
+        print(f"⚠️ Длина последовательности ({seq_len}) меньше максимального лага ({max_lag}).")
+        print(f"   Пробуем использовать всю доступную историю серии...")
+        # Используем максимально возможную длину из оригинальной серии
+        target_values_full = series.values.astype(float)[-max_lag:]
+        input_tensor = torch.tensor(target_values_full).unsqueeze(0).unsqueeze(-1).float().to(DEVICE)
+        seq_len = input_tensor.shape[1]
+        if seq_len < max_lag:
+            print(f"⚠️ Всё ещё недостаточно данных ({seq_len} < {max_lag}). Модель может не работать корректно.")
     
     # Устанавливаем модель в режим eval
     model.eval()
