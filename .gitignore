@@ -1,3 +1,4 @@
-Nothing should be ignored in this case, as the only change is adding a Python test file (.py), which is source code and should be tracked by git. There are no build artifacts, dependencies, or temporary files in the changes provided.
-
-Output: (empty)
+```
+__pycache__/
+*.pyc
+```
