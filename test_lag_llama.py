@@ -312,3 +312,109 @@ def main():
     except Exception as e:
         print(f"❌ Ошибка загрузки модели: {e}")
         return
+
+    # Настройка логирования
+    import logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler('prediction_log.txt', encoding='utf-8'),
+            logging.StreamHandler()
+        ]
+    )
+    logger = logging.getLogger(__name__)
+    logger.info(f"🚀 Запуск прогноза для {TICKER}")
+
+    # 3. Прогнозирование по каждому таймфрейму
+    results = {}
+    
+    for tf_name, tf_code in TIMEFRAMES.items():
+        logger.info(f"\n{'='*50}")
+        logger.info(f"📊 Обработка таймфрейма: {tf_name}")
+        
+        df = data_dict[tf_name]
+        if df.empty or len(df) < CONTEXT_LENGTH:
+            logger.warning(f"⚠️ Недостаточно данных для {tf_name} (нужно минимум {CONTEXT_LENGTH})")
+            continue
+        
+        # Подготовка данных
+        series = prepare_multivariate_series(df, 'Close')
+        last_price = df['Close'].iloc[-1]
+        last_prices = df['Close'].iloc[-5:].tolist()
+        volume_trend = get_volume_trend(df)
+        
+        logger.info(f"💹 Последняя цена: {last_price:.2f}")
+        logger.info(f"📈 Тренд объёма: {volume_trend}")
+        
+        # Прогноз Lag-Llama (на лог-возвратах)
+        try:
+            mean_pred, quantiles = predict_with_lag_llama(
+                estimator=estimator,
+                series=series,
+                freq=tf_code,
+                prediction_steps=PREDICTION_STEPS,
+                context_length=CONTEXT_LENGTH
+            )
+            
+            # Денормализация к абсолютным ценам
+            pred_prices = denormalize_predictions(mean_pred, last_price)
+            q_low_prices = denormalize_predictions(np.array([quantiles[0]] * PREDICTION_STEPS), last_price)
+            q_high_prices = denormalize_predictions(np.array([quantiles[1]] * PREDICTION_STEPS), last_price)
+            
+            # Вывод прогноза
+            logger.info(f"\n🔮 ПРОГНОЗ НА {PREDICTION_STEPS} ШАГОВ ({tf_name}):")
+            logger.info(f"{'Шаг':<6} | {'Прогноз':<10} | {'Низ (10%)':<10} | {'Верх (90%)':<10}")
+            logger.info("-" * 45)
+            
+            for i in range(PREDICTION_STEPS):
+                logger.info(
+                    f"{i+1:<6} | {pred_prices[i]:<10.2f} | {q_low_prices[i]:<10.2f} | {q_high_prices[i]:<10.2f}"
+                )
+            
+            # Сохранение результата
+            results[tf_name] = {
+                'predictions': pred_prices,
+                'quantile_low': q_low_prices,
+                'quantile_high': q_high_prices,
+                'last_price': last_price
+            }
+            
+            # Анализ через LLM (если доступен)
+            if LLM_ENABLED:
+                logger.info("\n🤖 Запрос анализа у локальной LLM...")
+                prompt = generate_analysis_prompt(
+                    ticker=TICKER,
+                    tf=tf_name,
+                    last_prices=last_prices,
+                    predictions=pred_prices,
+                    quantiles=(q_low_prices[-1], q_high_prices[-1]),
+                    volume_trend=volume_trend
+                )
+                
+                llm_response = query_local_llm(prompt)
+                if llm_response:
+                    logger.info(f"\n💬 АНАЛИЗ LLM:\n{llm_response}")
+                else:
+                    logger.info("⚠️ LLM не ответил (возможно сервер недоступен)")
+                    
+        except Exception as e:
+            logger.error(f"❌ Ошибка прогнозирования для {tf_name}: {e}")
+            logger.error(traceback.format_exc())
+            continue
+
+    # Итоговый вывод
+    logger.info(f"\n{'='*50}")
+    logger.info("✅ ПРОГНОЗИРОВАНИЕ ЗАВЕРШЕНО")
+    logger.info(f"📁 Лог сохранён в: prediction_log.txt")
+    
+    if results:
+        logger.info("\n📋 СВОДКА ПРОГНОЗОВ:")
+        for tf_name, res in results.items():
+            direction = "📈 рост" if res['predictions'][-1] > res['last_price'] else "📉 падение"
+            change_pct = ((res['predictions'][-1] / res['last_price']) - 1) * 100
+            logger.info(f"{tf_name}: {direction} ({change_pct:+.2f}%) к последнему шагу")
+
+
+if __name__ == "__main__":
+    main()
