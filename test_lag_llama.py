@@ -309,4 +309,6 @@ def main():
     # 2. Загрузка модели
     try:
         estimator = load_lag_llama_model(LAG_LLAMA_MODEL_PATH)
-    except Exception
+    except Exception as e:
+        print(f"❌ Ошибка загрузки модели: {e}")
+        return
