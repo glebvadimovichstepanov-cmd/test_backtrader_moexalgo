@@ -417,6 +417,27 @@ def predict_with_lag_llama(
         past_observed_values = torch.ones_like(input_tensor).to(DEVICE)
         
         print(f"   - past_observed_values.shape: {past_observed_values.shape}")
+        
+        # === КРИТИЧЕСКОЕ ЛОГИРОВАНИЕ: Проверяем lags_seq модели ===
+        if hasattr(model, 'hparams') and hasattr(model.hparams, 'model_kwargs'):
+            lags_seq = model.hparams.model_kwargs.get('lags_seq', [])
+            if lags_seq:
+                max_lag_in_seq = max(lags_seq)
+                print(f"\n🔍 [DEBUG] КРИТИЧЕСКАЯ ИНФОРМАЦИЯ О ЛАГАХ:")
+                print(f"   - lags_seq (первые 20): {lags_seq[:20]}")
+                print(f"   - lags_seq (последние 10): {lags_seq[-10:]}")
+                print(f"   - Максимальный лаг в lags_seq: {max_lag_in_seq}")
+                print(f"   - Длина input_tensor[0]: {input_tensor.shape[1]}")
+                if max_lag_in_seq > input_tensor.shape[1]:
+                    print(f"   ⚠️ ПРОБЛЕМА: max_lag ({max_lag_in_seq}) > длины последовательности ({input_tensor.shape[1]})")
+                    print(f"   → Необходимо передать минимум {max_lag_in_seq} точек данных!")
+        
+        # Проверяем, не сжался ли тензор где-то
+        print(f"\n🔍 [DEBUG] Финальная проверка перед model.model():")
+        print(f"   - input_tensor.isnan().sum(): {input_tensor.isnan().sum().item()}")
+        print(f"   - input_tensor.isinf().sum(): {input_tensor.isinf().sum().item()}")
+        print(f"   - input_tensor[:, -10:, :] (последние 10 значений): {input_tensor[:, -10:, :].squeeze()}")
+        
         print(f"   - Вызов model.model(input_tensor, past_observed_values=past_observed_values)...")
         
         # Получаем параметры распределения от модели
