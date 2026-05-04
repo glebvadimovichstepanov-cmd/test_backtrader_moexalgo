@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Прогнозирование движений SNGS на 3 таймфреймах с использованием:
-- Lag-Llama (https://github.com/autonlab/Lag-Llama) для forecasting
+- Lag-Llama (https://github.com/time-series-foundation-models/lag-llama) для forecasting
 - Локального LLM-сервера (127.0.0.1:8080) для интерпретации результатов
 
 Запуск:
@@ -29,7 +29,7 @@ try:
     from lag_llama.gluon.estimator import LagLlamaEstimator
     from gluonts.dataset.pandas import PandasDataset
 except ImportError:
-    print("❌ Lag-Llama не установлен. Выполните: pip install git+https://github.com/autonlab/Lag-Llama.git")
+    print("❌ Lag-Llama не установлен. Выполните: pip install git+https://github.com/time-series-foundation-models/lag-llama.git")
     sys.exit(1)
 
 # Ваши импорты
