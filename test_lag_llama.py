@@ -58,12 +58,12 @@ TIMEFRAMES = {
 }
 
 # Период данных
-START_DATE = pd.Timestamp('2025-01-01')
+START_DATE = pd.Timestamp('2022-01-01')
 END_DATE = pd.Timestamp('2026-05-01')
 
 # Параметры прогноза
 PREDICTION_STEPS = 5  # Сколько шагов вперёд предсказывать
-CONTEXT_LENGTH = 200  # Длина контекста для Lag-Llama
+CONTEXT_LENGTH = 1092  # Длина контекста для Lag-Llama
 
 # Локальный LLM сервер
 LLM_API_URL = "http://127.0.0.1:8080/completion"
