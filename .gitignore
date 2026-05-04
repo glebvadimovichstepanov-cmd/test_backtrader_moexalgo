@@ -1,1 +1,32 @@
-Nothing should be ignored based on the provided file changes. The only modified file is `test_lag_llama.py`, which is a Python source file and should not be ignored.
+```
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+
+# Environment files
+.env
+.env.local
+*.env.*
+
+# Editors and IDEs
+.vscode/
+.idea/
+
+# Dependencies and build artifacts
+venv/
+.venv/
+node_modules/
+dist/
+build/
+target/
+.gradle/
+.mypy_cache/
+.pytest_cache/
+```
