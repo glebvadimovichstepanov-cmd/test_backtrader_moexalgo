@@ -227,7 +227,6 @@ def predict_with_lag_llama(
     Возвращает: (mean_prediction, quantiles_0.1_0.9)
     """
     from gluonts.dataset.field_names import FieldName
-    from gluonts.itertools import batcher
     from gluonts.transform import InstanceSplitter, ExpectedNumInstanceSampler
     
     # Подготовка данных для модели
@@ -238,15 +237,15 @@ def predict_with_lag_llama(
     }
     
     # Создаем трансформацию для подготовки данных
+    # В новых версиях GluonTS используется instance_sampler вместо train_sampler
     transformation = InstanceSplitter(
         target_field=FieldName.TARGET,
         is_pad_field=FieldName.IS_PAD,
         start_field=FieldName.START,
         forecast_start_field=FieldName.FORECAST_START,
-        train_sampler=ExpectedNumInstanceSampler(num_instances=1.0),
+        instance_sampler=ExpectedNumInstanceSampler(num_instances=1.0),
         past_length=context_length,
-        future_length=prediction_steps,
-        leading_pad_labels=[prediction_steps]
+        future_length=prediction_steps
     )
     
     # Применяем трансформацию
