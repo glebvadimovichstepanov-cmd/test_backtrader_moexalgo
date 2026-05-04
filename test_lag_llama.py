@@ -230,7 +230,7 @@ def predict_with_lag_llama(
     from gluonts.torch.distributions.studentT import StudentTOutput
     from gluonts.torch import PyTorchPredictor
     from gluonts.transform import Chain, InstanceSplitter, TestSplitSampler, ExpectedNumInstanceSampler
-    from gluonts.transform.feature import AddTimeFeatures, AddAgeFeature
+    from gluonts.transform.feature import AddTimeFeatures
     from gluonts.transform import AsNumpyArray, ExpandDimArray
     from gluonts.time_feature import time_features_from_frequency_str
     
@@ -302,11 +302,6 @@ def predict_with_lag_llama(
                 time_features=time_feat,
                 pred_length=prediction_steps,
             ) if time_feat_flag else AsNumpyArray(field="target", expected_ndim=1),
-            AddAgeFeature(
-                target_field="target",
-                output_field="age_feat",
-                pred_length=prediction_steps,
-            ),
             InstanceSplitter(
                 target_field="target",
                 is_pad_field="is_pad",
@@ -315,15 +310,15 @@ def predict_with_lag_llama(
                 instance_sampler=TestSplitSampler(),
                 past_length=context_length_model,
                 future_length=prediction_steps,
-                time_series_fields=["time_feat", "age_feat"] if time_feat_flag else ["age_feat"],
+                time_series_fields=["time_feat"] if time_feat_flag else [],
             ),
         ]
     )
     
-    # Создаём predictor с правильными input_names
-    input_names = ["past_target", "past_observed_values", "past_age_feat"]
+    # Создаём predictor с правильными input_names (без age_feat)
+    input_names = ["past_target", "past_observed_values"]
     if time_feat_flag:
-        input_names.insert(2, "past_time_feat")
+        input_names.append("past_time_feat")
     
     print(f"\n🔍 [DEBUG] Создание PyTorchPredictor...")
     print(f"   - input_names: {input_names}")

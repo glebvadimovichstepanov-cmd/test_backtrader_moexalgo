@@ -1,12 +1,1 @@
-```
-# Logs and checkpoints
-lightning_logs/
-*.ckpt
-*.log
-
-# Cache data
-cache_data/
-
-# Original rules preserved
-*.log
-```
+Nothing should be ignored based on the provided file changes. The only modified file is `test_lag_llama.py`, which is a Python source file and should not be ignored.
