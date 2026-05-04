@@ -54,12 +54,12 @@ TICKER = 'SNGS'
 TIMEFRAMES = {
     '1D': '1d',
     '1H': '1h',
-    '15min': '15min'
+    '15T': '15min'
 }
 
 # Период данных
-START_DATE = pd.Timestamp('2023-01-01')
-END_DATE = pd.Timestamp('2024-12-31')
+START_DATE = pd.Timestamp('2025-01-01')
+END_DATE = pd.Timestamp('2026-05-04')
 
 # Параметры прогноза
 PREDICTION_STEPS = 5  # Сколько шагов вперёд предсказывать
@@ -79,8 +79,8 @@ print(f"🖥️ Используемое устройство: {DEVICE}")
 
 def load_data_tf(ticker_name: str, start: pd.Timestamp, end: pd.Timestamp) -> Optional[Dict[str, pd.DataFrame]]:
     """Загружает OHLCV данные с MOEX с чанкованием и кэшированием"""
-    tf_map = {'1D': '1d', '1H': '1h', '15min': '1m'}  # Для 15min используем 1m и ресамплим
-    
+    tf_map = {'1D': '1d', '1H': '1h', '15T': '15min'}
+
     # Разбиваем период на чанки по 30 дней
     date_ranges = pd.date_range(start=start, end=end, freq='30D')
     ranges = [(date_ranges[i], date_ranges[i + 1]) for i in range(len(date_ranges) - 1)]
