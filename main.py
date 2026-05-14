@@ -22,7 +22,7 @@ from typing import Tuple, Optional
 import test_lag_llama
 
 # Импорт утилит из t_tech.invest
-from t_tech.invest import Client, OrderDirection, OrderType
+from t_tech.invest import Client, OrderDirection, OrderType, StopOrderDirection
 
 # Настройки
 MIN_CONFIDENCE = 60
