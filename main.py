@@ -27,6 +27,7 @@ from t_tech.invest import Client, OrderDirection, OrderType, StopOrderDirection
 # Настройки
 MIN_CONFIDENCE = 60
 MIN_RR_RATIO = 1.5
+MIN_PROFIT_PCT = 0.9  # Минимальный прогноз profit в % для входа
 
 
 def setup_logger() -> logging.Logger:
@@ -161,9 +162,9 @@ def validate_signal(signal: dict) -> Tuple[bool, str]:
     if not signal["session_ok"]:
         return False, "Торговая сессия MOEX не активна"
     
-    # Проверка 5: прогноз profit >= 0.9%
-    if signal.get("predicted_profit_pct", 0) < 0.9:
-        return False, f"Прогноз profit {signal.get('predicted_profit_pct', 0):.2f}% ниже минимума 0.5%"
+    # Проверка 5: прогноз profit >= минимального порога
+    if signal.get("predicted_profit_pct", 0) < MIN_PROFIT_PCT:
+        return False, f"Прогноз profit {signal.get('predicted_profit_pct', 0):.2f}% ниже минимума {MIN_PROFIT_PCT}%"
     
     return True, "OK"
 
