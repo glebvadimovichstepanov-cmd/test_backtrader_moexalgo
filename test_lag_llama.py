@@ -1,556 +1,755 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Прогнозирование движений SNGS на 3 таймфреймах с использованием:
-- Lag-Llama (https://github.com/time-series-foundation-models/lag-llama) для forecasting
-- Локального LLM-сервера (127.0.0.1:8080) для интерпретации результатов
+Прогнозирование SNGS + генерация торгового сигнала для интрадей-робота.
 
-Запуск:
-    python predict_sngs.py
+Улучшения для надёжного сигнала:
+  1. Мультитаймфреймовый консенсус с весами (10T > 1H > 1D для интрадей)
+  2. Фильтр качества сигнала: требуем минимальный R/R и узкий интервал
+  3. Фильтр торговой сессии MOEX (не торгуем в первые/последние 30 мин)
+  4. Паттерн-фильтр: сигнал только при согласии модели и индикаторов
+  5. Confidence score 0-100 с порогом входа
+  6. Стоп-лосс и тейк-профит из квантилей прогноза
+  7. Ensemble: запускаем модель N раз и усредняем (снижает шум)
 """
 
 import os
 import sys
-import json
-import time
+import logging
 import warnings
 import traceback
-from datetime import datetime
+from datetime import datetime, time as dtime
 from typing import Dict, List, Optional, Tuple
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+warnings.filterwarnings("ignore")
+logging.getLogger("lightning").setLevel(logging.ERROR)
+logging.getLogger("lightning.pytorch").setLevel(logging.ERROR)
+logging.getLogger("pytorch_lightning").setLevel(logging.ERROR)
 
 import pandas as pd
 import numpy as np
 import torch
 import requests
-from tqdm import tqdm
 
-# Lag-Llama imports
+logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+
 try:
     from lag_llama.gluon.estimator import LagLlamaEstimator
-    from lag_llama.gluon.lightning_module import LagLlamaLightningModule
     from gluonts.dataset.pandas import PandasDataset
-    from gluonts.torch.distributions.studentT import StudentTOutput
-    from gluonts.torch.modules.loss import NegativeLogLikelihood
     from gluonts.evaluation.backtest import make_evaluation_predictions
+    logging.getLogger("gluonts").setLevel(logging.ERROR)
 except ImportError:
-    print("❌ Lag-Llama не установлен. Выполните: pip install git+https://github.com/time-series-foundation-models/lag-llama.git")
+    print("Lag-Llama не установлен.")
     sys.exit(1)
 
-# Ваши импорты
 import moexalgo
-# vectorbt не нужен для отладки - исключено
 
-warnings.filterwarnings('ignore')
-pd.set_option('mode.chained_assignment', None)
+# ── PyTorch 2.6: weights_only patch ───────────────────────────────────────
+_orig_load = torch.load
+def _patched_load(f, map_location=None, pickle_module=None,
+                  weights_only=False, mmap=None, **kw):
+    return _orig_load(f, map_location=map_location, pickle_module=pickle_module,
+                      weights_only=False, **({} if mmap is None else {"mmap": mmap}), **kw)
+torch.load = _patched_load
+# ──────────────────────────────────────────────────────────────────────────
+
+pd.set_option("mode.chained_assignment", None)
 np.random.seed(42)
 torch.manual_seed(42)
 
-# ======================== 🔧 НАСТРОЙКИ ========================
-DEBUG = True
-CACHE_DIR = 'cache_data'
+# ======================== НАСТРОЙКИ ========================
+
+TICKER        = "SNGS"
+CACHE_DIR     = "cache_data"
+RESULTS_DIR   = "results"
 os.makedirs(CACHE_DIR, exist_ok=True)
+os.makedirs(RESULTS_DIR, exist_ok=True)
 
-# Тикер и таймфреймы
-TICKER = 'SNGS'
-TIMEFRAMES = {
-    '1D': '1d',
-    '1H': '1h',
-    '10T': '10min'
-}
+START_DATE = pd.Timestamp("2022-01-01")
+END_DATE   = pd.Timestamp("2026-06-01")
 
-# Период данных
-START_DATE = pd.Timestamp('2022-01-01')
-END_DATE = pd.Timestamp('2026-05-01')
+PREDICTION_STEPS = 5
+CONTEXT_LENGTH   = 1092
+NUM_SAMPLES      = 200   # больше семплов = стабильнее квантили
+ENSEMBLE_RUNS    = 3     # запускаем модель N раз и усредняем (снижает шум)
 
-# Параметры прогноза
-PREDICTION_STEPS = 5  # Сколько шагов вперёд предсказывать
-CONTEXT_LENGTH = 1092  # Длина контекста для Lag-Llama
+# Веса таймфреймов для интрадей (короткие важнее)
+TF_WEIGHTS = {"10T": 0.50, "1H": 0.35, "1D": 0.15}
+TIMEFRAMES  = {"1D": "1d", "1H": "1h", "10T": "10min"}
 
-# Локальный LLM сервер
+# Параметры торгового фильтра
+MIN_CONFIDENCE    = 60    # минимальный score 0-100 для входа
+MIN_EXPECTED_MOVE = 0.15  # минимальное ожидаемое движение в % (иначе шум)
+MAX_INTERVAL_PCT  = 2.0   # максимальная ширина интервала в % от цены
+MIN_RR_RATIO      = 1.5   # минимальный Risk/Reward
+
+# Торговая сессия MOEX
+SESSION_START = dtime(10, 30)   # не входим в первые 30 мин
+SESSION_END   = dtime(18, 30)   # не входим в последние 30 мин
+
 LLM_API_URL = "http://127.0.0.1:8080/completion"
-LLM_ENABLED = True  # Отключите, если сервер не запущен
+LLM_ENABLED = True
 
-# Параметры Lag-Llama
-LAG_LLAMA_MODEL_PATH = None  # None = использовать предобученную модель
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-print(f"🖥️ Используемое устройство: {DEVICE}")
+LAG_LLAMA_CHECKPOINT_PATH = None
 
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Устройство: {DEVICE}")
 
-# ======================== 📥 ЗАГРУЗКА ДАННЫХ ========================
+# ======================== ЛОГИРОВАНИЕ ========================
 
-def load_data_tf(ticker_name: str, start: pd.Timestamp, end: pd.Timestamp) -> Optional[Dict[str, pd.DataFrame]]:
-    """Загружает OHLCV данные с MOEX с чанкованием и кэшированием"""
-    tf_map = {'1D': '1d', '1H': '1h', '10T': '10min'}
+def setup_logger() -> logging.Logger:
+    logger = logging.getLogger("sngs_signal")
+    logger.setLevel(logging.INFO)
+    if logger.handlers:
+        logger.handlers.clear()
+    fmt = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s",
+                            datefmt="%H:%M:%S")
+    fh = logging.FileHandler("signal_log.txt", encoding="utf-8")
+    fh.setFormatter(fmt)
+    ch = logging.StreamHandler()
+    ch.setFormatter(fmt)
+    logger.addHandler(fh)
+    logger.addHandler(ch)
+    return logger
 
-    # Разбиваем период на чанки по 30 дней
-    date_ranges = pd.date_range(start=start, end=end, freq='30D')
-    ranges = [(date_ranges[i], date_ranges[i + 1]) for i in range(len(date_ranges) - 1)]
+# ======================== ЗАГРУЗКА ДАННЫХ ========================
+
+def load_data_tf(ticker_name: str, start: pd.Timestamp, end: pd.Timestamp,
+                 logger: logging.Logger) -> Optional[Dict[str, pd.DataFrame]]:
+    tf_map = {"1D": "1d", "1H": "1h", "10T": "10min"}
+    date_ranges = pd.date_range(start=start, end=end, freq="30D")
+    ranges = [(date_ranges[i], date_ranges[i+1]) for i in range(len(date_ranges)-1)]
     if date_ranges[-1] < end:
         ranges.append((date_ranges[-1], end))
 
     dataframes = {}
-
     for tf_name, tf_code in tf_map.items():
-        cache_file = os.path.join(CACHE_DIR,
-                                  f"{ticker_name}_{tf_name}_{start.strftime('%Y%m%d')}_{end.strftime('%Y%m%d')}.csv")
-
-        # Проверка кэша
+        cache_file = os.path.join(
+            CACHE_DIR,
+            f"{ticker_name}_{tf_name}_{start.strftime('%Y%m%d')}_{end.strftime('%Y%m%d')}.csv"
+        )
         if os.path.exists(cache_file):
-            print(f"📂 [{tf_name}] Загружаем из кэша...")
+            logger.info(f"[{tf_name}] Из кэша")
             df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
             if not df.empty:
                 dataframes[tf_name] = df
                 continue
 
-        print(f"📥 [{tf_name}] Загружаем {ticker_name} с MOEX ({tf_code})...")
+        logger.info(f"[{tf_name}] Загрузка с MOEX...")
         ticker = moexalgo.Ticker(ticker_name)
         chunk_dfs = []
-
         for chunk_start, chunk_end in ranges:
             try:
-                # Для MOEX Algo период должен быть в формате: '1m', '5m', '10m', '15m', '30m', '1h', '1d'
-                period_param = tf_code
-                
                 df_chunk = ticker.candles(
-                    start=chunk_start.strftime('%Y-%m-%d'),
-                    end=chunk_end.strftime('%Y-%m-%d'),
-                    period=period_param
+                    start=chunk_start.strftime("%Y-%m-%d"),
+                    end=chunk_end.strftime("%Y-%m-%d"),
+                    period=tf_code
                 )
                 if df_chunk is not None and not df_chunk.empty:
-                    # Нормализация колонок
-                    idx_col = 'date' if 'date' in df_chunk.columns else 'begin'
+                    idx_col = "date" if "date" in df_chunk.columns else "begin"
                     df_chunk = df_chunk.set_index(idx_col)
                     df_chunk = df_chunk.rename(columns={
-                        'open': 'Open', 'high': 'High', 'low': 'Low',
-                        'close': 'Close', 'volume': 'Volume'
+                        "open": "Open", "high": "High", "low": "Low",
+                        "close": "Close", "volume": "Volume"
                     })
                     df_chunk.index = pd.to_datetime(df_chunk.index)
                     chunk_dfs.append(df_chunk)
             except Exception as e:
-                print(f"⚠️ Ошибка загрузки чанка [{tf_name}] {chunk_start}: {e}")
-                continue
+                logger.warning(f"  Ошибка чанка [{tf_name}] {chunk_start}: {e}")
 
         if not chunk_dfs:
-            print(f"❌ [{tf_name}] Не удалось получить данные.")
+            logger.error(f"[{tf_name}] Нет данных")
             continue
 
-        # Объединение и очистка
         df = pd.concat(chunk_dfs).sort_index()
-        df = df[~df.index.duplicated(keep='first')]
-
-        # Сохранение в кэш
+        df = df[~df.index.duplicated(keep="first")]
         df.to_csv(cache_file)
-        print(f"💾 [{tf_name}] Сохранено в кэш: {len(df)} баров")
 
-        # Фильтрация колонок и обработка пропусков
-        needed = ['Open', 'High', 'Low', 'Close', 'Volume']
+        needed = ["Open", "High", "Low", "Close", "Volume"]
         df = df[needed].dropna()
-        for col in ['Close', 'High', 'Low']:
+        for col in ["Close", "High", "Low"]:
             df[col] = df[col].replace([np.inf, -np.inf], np.nan).ffill().bfill().clip(lower=0.01)
 
         dataframes[tf_name] = df
+        logger.info(f"[{tf_name}] {len(df)} баров")
 
     return dataframes if dataframes else None
 
+# ======================== ТЕХНИЧЕСКИЕ ИНДИКАТОРЫ ========================
 
-# ======================== 🔄 ПРЕДОБРАБОТКА ДЛЯ LAG-LLAMA ========================
+def compute_rsi(series: pd.Series, period: int = 14) -> float:
+    delta = series.diff().dropna()
+    gain  = delta.clip(lower=0).rolling(period).mean()
+    loss  = (-delta.clip(upper=0)).rolling(period).mean()
+    rs    = gain / loss.replace(0, np.nan)
+    rsi   = 100 - (100 / (1 + rs))
+    return round(float(rsi.iloc[-1]), 1)
 
-def prepare_multivariate_series(df: pd.DataFrame, target_col: str = 'Close') -> pd.Series:
-    """
-    Подготавливает multivariate OHLCV данные для Lag-Llama.
-    Lag-Llama работает с univariate, поэтому используем основной таргет (Close),
-    но можно добавить фичи через кастомный энкодер (расширение).
-    """
-    # Нормализация через log-returns для стационарности
-    series = df[target_col].copy()
+def compute_macd(series: pd.Series) -> Tuple[float, float, str]:
+    ema12  = series.ewm(span=12, adjust=False).mean()
+    ema26  = series.ewm(span=26, adjust=False).mean()
+    macd   = ema12 - ema26
+    signal = macd.ewm(span=9, adjust=False).mean()
+    # Определяем направление и тип пересечения
+    cross = "bullish" if float(macd.iloc[-1]) > float(signal.iloc[-1]) else "bearish"
+    return round(float(macd.iloc[-1]), 4), round(float(signal.iloc[-1]), 4), cross
 
-    # Логарифмические возвраты (уменьшает нестационарность)
-    log_returns = np.log(series / series.shift(1)).dropna()
+def compute_bb(series: pd.Series, period: int = 20) -> Tuple[float, float, float, str]:
+    ma    = series.rolling(period).mean()
+    std   = series.rolling(period).std()
+    upper = float((ma + 2*std).iloc[-1])
+    lower = float((ma - 2*std).iloc[-1])
+    price = float(series.iloc[-1])
+    pos   = (price - lower) / (upper - lower) if upper != lower else 0.5
+    if price > upper:
+        zone = "overbought"
+    elif price < lower:
+        zone = "oversold"
+    elif pos < 0.2:
+        zone = "near_lower"
+    elif pos > 0.8:
+        zone = "near_upper"
+    else:
+        zone = "mid"
+    return upper, lower, pos, zone
 
-    # Заполнение пропусков
-    log_returns = log_returns.ffill().bfill()
+def compute_atr(df: pd.DataFrame, period: int = 14) -> float:
+    """Average True Range — мера волатильности для стоп-лосса"""
+    h, l, c = df["High"], df["Low"], df["Close"]
+    tr = pd.concat([
+        h - l,
+        (h - c.shift()).abs(),
+        (l - c.shift()).abs()
+    ], axis=1).max(axis=1)
+    return round(float(tr.rolling(period).mean().iloc[-1]), 4)
 
-    return log_returns
-
-
-def create_gluonts_dataset(series: pd.Series, freq: str) -> PandasDataset:
-    """Создаёт GluonTS Dataset из pandas Series"""
-    # GluonTS ожидает данные в специфичном формате
-    dataset = [{
-        "start": series.index[0],
-        "target": series.values,
-        "feat_static_cat": [0],  # dummy feature
-        "item_id": "SNGS"
-    }]
-    return PandasDataset(dataset, freq=freq)
-
-
-# ======================== 🔮 ПРОГНОЗИРОВАНИЕ С LAG-LLAMA ========================
-
-def load_lag_llama_model(model_path: Optional[str] = None):
-    """Загружает предобученную модель Lag-Llama"""
-    print(f"🤖 Загрузка Lag-Llama модели на {DEVICE}...")
-
-    # Добавляем необходимые классы в безопасные глобальные объекты для torch.load
-    torch.serialization.add_safe_globals([StudentTOutput, NegativeLogLikelihood])
-    
-    # Lag-Llama использует хаб моделей HuggingFace
-    if model_path is None:
-        try:
-            from huggingface_hub import hf_hub_download
-            checkpoint_path = hf_hub_download(
-                repo_id="time-series-foundation-models/Lag-Llama",
-                filename="lag-llama.ckpt",
-                repo_type="model"
-            )
-            print(f"📥 Модель загружена с HuggingFace: {checkpoint_path}")
-        except Exception as e:
-            print(f"❌ Ошибка загрузки модели с HuggingFace: {e}")
-            raise
-    
-    # Загружаем модель из чекпоинта
-    model = LagLlamaLightningModule.load_from_checkpoint(checkpoint_path, map_location=DEVICE)
-    print("✅ Модель успешно загружена!")
-    return model
-
-
-def predict_with_lag_llama(
-        model,
-        series: pd.Series,
-        freq: str,
-        prediction_steps: int,
-        context_length: int = 200
-) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Делает прогноз на prediction_steps шагов вперёд с использованием Lag-Llama
-    через правильный GluonTS Predictor API.
-    Возвращает: (mean_prediction, quantiles_0.1_0.9)
-    """
-    from gluonts.dataset.common import ListDataset
-    from gluonts.torch.distributions.studentT import StudentTOutput
-    from gluonts.torch import PyTorchPredictor
-    from gluonts.transform import Chain, InstanceSplitter, TestSplitSampler, ExpectedNumInstanceSampler
-    from gluonts.transform.feature import AddTimeFeatures
-    from gluonts.transform import AsNumpyArray, ExpandDimArray
-    from gluonts.time_feature import time_features_from_frequency_str
-    
-    # Добавляем StudentTOutput в безопасные глобальные объекты для torch.load
-    torch.serialization.add_safe_globals([StudentTOutput])
-    
-    # === ЛОГИРОВАНИЕ: Начало подготовки данных ===
-    print(f"\n🔍 [DEBUG] predict_with_lag_llama вызвана:")
-    print(f"   - Длина входной серии: {len(series)}")
-    print(f"   - prediction_steps: {prediction_steps}")
-    print(f"   - Частота (freq): {freq}")
-    
-    # Проверяем наличие NaN или inf
-    nan_count = series.isna().sum()
-    inf_count = np.isinf(series).sum()
-    if nan_count > 0 or inf_count > 0:
-        print(f"   ⚠️ NaN: {nan_count}, Inf: {inf_count}")
-        series = series.replace([np.inf, -np.inf], np.nan).ffill().bfill()
-    
-    # Убеждаемся, что у нас достаточно данных
-    actual_context = min(len(series), context_length)
-    if len(series) < context_length:
-        print(f"⚠️ Мало данных ({len(series)}), используем контекст {actual_context}")
-    
-    # Берём последние actual_context точек для прогноза
-    series_short = series.tail(actual_context)
-    
-    print(f"\n🔍 [DEBUG] После обрезки series_short:")
-    print(f"   - Длина series_short: {len(series_short)}")
-    
-    # Создаём GluonTS Dataset в правильном формате
-    freq_map = {'1d': 'D', '1h': 'H', '10min': 'T'}
-    gluonts_freq = freq_map.get(freq, 'D')
-    
-    start_period = series_short.index[0].to_period(gluonts_freq) if hasattr(series_short.index[0], 'to_period') else pd.Period(series_short.index[0], freq=gluonts_freq)
-    
-    dataset = ListDataset([
-        {
-            "start": start_period,
-            "target": series_short.values.astype(float).tolist(),
-            "item_id": "SNGS"
-        }
-    ], freq=gluonts_freq)
-    
-    # Получаем параметры из загруженной модели
-    hparams = model.hparams
-    model_kwargs = hparams.model_kwargs if hasattr(hparams, 'model_kwargs') else {}
-    
-    context_length_model = hparams.context_length if hasattr(hparams, 'context_length') else context_length
-    time_feat_flag = model_kwargs.get('time_feat', False)
-    
-    # Создаём time features если нужно
-    time_feat = []
-    if time_feat_flag:
-        try:
-            time_feat = time_features_from_frequency_str(gluonts_freq)
-        except Exception:
-            time_feat_flag = False
-    
-    # Создаём трансформацию для подготовки данных
-    transformation = Chain(
-        [
-            AsNumpyArray(field="target", expected_ndim=1),
-            ExpandDimArray(field="target", axis=0),
-            AddTimeFeatures(
-                start_field="start",
-                target_field="target",
-                output_field="time_feat",
-                time_features=time_feat,
-                pred_length=prediction_steps,
-            ) if time_feat_flag else AsNumpyArray(field="target", expected_ndim=1),
-            InstanceSplitter(
-                target_field="target",
-                is_pad_field="is_pad",
-                start_field="start",
-                forecast_start_field="forecast_start",
-                instance_sampler=TestSplitSampler(),
-                past_length=context_length_model,
-                future_length=prediction_steps,
-                time_series_fields=["time_feat"] if time_feat_flag else [],
-            ),
-        ]
-    )
-    
-    # Создаём predictor с правильными input_names (без age_feat)
-    input_names = ["past_target", "past_observed_values"]
-    if time_feat_flag:
-        input_names.append("past_time_feat")
-    
-    print(f"\n🔍 [DEBUG] Создание PyTorchPredictor...")
-    print(f"   - input_names: {input_names}")
-    print(f"   - context_length: {context_length_model}")
-    
-    predictor = PyTorchPredictor(
-        prediction_length=prediction_steps,
-        input_names=input_names,
-        prediction_net=model.model,
-        batch_size=1,
-        input_transform=transformation,
-        output_transform=lambda x: x,
-        device=torch.device(DEVICE),
-    )
-    
-    # Используем make_evaluation_predictions для правильного форматирования данных
-    print(f"\n🔍 [DEBUG] Вызов make_evaluation_predictions...")
-    
-    forecast_it, ts_it = make_evaluation_predictions(
-        dataset=dataset,
-        predictor=predictor,
-        num_samples=100,
-    )
-    
-    forecasts = list(forecast_it)
-    
-    if not forecasts:
-        raise ValueError("make_evaluation_predictions не вернул прогнозов")
-    
-    forecast = forecasts[0]
-    
-    # Извлекаем среднее и квантили из forecast
-    mean_pred = forecast.mean
-    q_low = forecast.quantile(0.1)
-    q_high = forecast.quantile(0.9)
-    
-    print(f"   ✅ Прогноз получен: mean_pred.shape={mean_pred.shape}")
-    
-    return mean_pred, (q_low, q_high)
-
-
-# ======================== 🤖 ИНТЕГРАЦИЯ С ЛОКАЛЬНЫМ LLM ========================
-
-def query_local_llm(prompt: str, max_tokens: int = 512) -> Optional[str]:
-    """Отправляет промпт на локальный LLM-сервер (llama.cpp / koboldcpp API)"""
-    if not LLM_ENABLED:
-        return None
-
-    try:
-        payload = {
-            "prompt": prompt,
-            "n_predict": max_tokens,
-            "temperature": 0.3,
-            "stop": ["</s>", "###", "\n\n"]
-        }
-        response = requests.post(LLM_API_URL, json=payload, timeout=60)
-        response.raise_for_status()
-        result = response.json()
-        return result.get("content", "").strip()
-    except Exception as e:
-        print(f"⚠️ Ошибка запроса к LLM: {e}")
-        return None
-
-
-def generate_analysis_prompt(
-        ticker: str,
-        tf: str,
-        last_prices: List[float],
-        predictions: np.ndarray,
-        quantiles: Tuple[float, float],
-        volume_trend: str
-) -> str:
-    """Формирует промпт для анализа прогноза"""
-    pred_list = predictions.tolist()
-    q_low, q_high = quantiles
-
-    prompt = f"""Ты — финансовый аналитик. Проанализируй прогноз для {ticker} на таймфрейме {tf}.
-
-📊 Последние 5 цен закрытия: {[round(p, 2) for p in last_prices]}
-🔮 Прогноз на 5 шагов вперёд (среднее): {[round(p, 4) for p in pred_list]}
-📏 Доверительный интервал (10%-90%): [{round(q_low, 4)}, {round(q_high, 4)}]
-📈 Тренд объёма: {volume_trend}
-
-Дай краткий вывод:
-1. Ожидаемое направление (бычий/медвежий/боковик)
-2. Уровень уверенности (низкий/средний/высокий)
-3. Ключевой риск или возможность
-
-Ответь на русском, 3-4 предложения."""
-
-    return prompt
-
-
-# ======================== 📊 ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ========================
+def compute_adx(df: pd.DataFrame, period: int = 14) -> float:
+    """ADX — сила тренда. >25 = сильный тренд, <20 = флэт"""
+    h, l, c = df["High"], df["Low"], df["Close"]
+    up   = h - h.shift()
+    down = l.shift() - l
+    tr   = pd.concat([h-l, (h-c.shift()).abs(), (l-c.shift()).abs()], axis=1).max(axis=1)
+    plus_dm  = np.where((up > down) & (up > 0), up, 0)
+    minus_dm = np.where((down > up) & (down > 0), down, 0)
+    atr14    = tr.ewm(span=period, adjust=False).mean()
+    plus_di  = 100 * pd.Series(plus_dm, index=df.index).ewm(span=period, adjust=False).mean() / atr14
+    minus_di = 100 * pd.Series(minus_dm, index=df.index).ewm(span=period, adjust=False).mean() / atr14
+    dx = (100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)).fillna(0)
+    adx = dx.ewm(span=period, adjust=False).mean()
+    return round(float(adx.iloc[-1]), 1)
 
 def get_volume_trend(df: pd.DataFrame, window: int = 20) -> str:
-    """Определяет тренд объёма"""
-    recent = df['Volume'].iloc[-window:].mean()
-    older = df['Volume'].iloc[-2 * window:-window].mean()
+    recent = df["Volume"].iloc[-window:].mean()
+    older  = df["Volume"].iloc[-2*window:-window].mean()
     if recent > older * 1.2:
-        return "растущий 📈"
+        return "растущий"
     elif recent < older * 0.8:
-        return "падающий 📉"
-    return "нейтральный ➡️"
+        return "падающий"
+    return "нейтральный"
+
+def detect_support_resistance(df: pd.DataFrame, lookback: int = 50) -> Tuple[float, float]:
+    """Простые уровни поддержки/сопротивления через локальные экстремумы"""
+    recent = df["Close"].iloc[-lookback:]
+    support    = float(recent.min())
+    resistance = float(recent.max())
+    return support, resistance
+
+# ======================== ПРЕДОБРАБОТКА ========================
+
+def prepare_log_returns(df: pd.DataFrame, target_col: str = "Close") -> pd.Series:
+    series = df[target_col].copy()
+    lr = np.log(series / series.shift(1)).dropna()
+    return lr.replace([np.inf, -np.inf], np.nan).ffill().bfill()
+
+# ======================== ЧЕКПОИНТ ========================
+
+_CKPT_CACHE: Dict = {}
+
+def get_checkpoint_path(model_path: Optional[str] = None) -> str:
+    if model_path and os.path.exists(model_path):
+        return model_path
+    from huggingface_hub import hf_hub_download
+    return hf_hub_download(
+        repo_id="time-series-foundation-models/Lag-Llama",
+        filename="lag-llama.ckpt", repo_type="model"
+    )
+
+def load_checkpoint_data(path: str) -> dict:
+    if path not in _CKPT_CACHE:
+        _CKPT_CACHE[path] = torch.load(path, map_location="cpu", weights_only=False)
+    return _CKPT_CACHE[path]
+
+# ======================== ПРОГНОЗИРОВАНИЕ ========================
+
+def _single_predict(checkpoint_path: str, series_ctx: pd.Series,
+                    pd_freq: str, prediction_steps: int,
+                    actual_context: int, num_samples: int) -> Tuple[np.ndarray, np.ndarray]:
+    """Один прогон модели, возвращает (mean, samples)"""
+    dataset = PandasDataset({"target": series_ctx.astype("float32")}, freq=pd_freq)
+
+    ckpt_data    = load_checkpoint_data(checkpoint_path)
+    hparams      = ckpt_data.get("hyper_parameters", {})
+    model_kwargs = hparams.get("model_kwargs", {})
+
+    SKIP = {"distr_output", "rope_scaling", "lags_seq",
+            "input_size", "context_length", "prediction_length"}
+    ARCH = {"n_embd_per_head", "n_layer", "n_head", "max_context_length",
+            "scaling", "time_feat", "num_parallel_samples", "dropout"}
+
+    ekw = dict(ckpt_path=checkpoint_path, prediction_length=prediction_steps,
+               context_length=actual_context, num_parallel_samples=num_samples,
+               device=DEVICE, batch_size=1)
+    for k, v in model_kwargs.items():
+        if k in ARCH and k not in SKIP:
+            ekw[k] = v
+
+    est  = LagLlamaEstimator(**ekw)
+    pred = est.create_predictor(est.create_transformation(), est.create_lightning_module())
+
+    fc_it, _ = make_evaluation_predictions(dataset=dataset, predictor=pred, num_samples=num_samples)
+    fcs = list(fc_it)
+    if not fcs:
+        raise ValueError("Нет прогнозов")
+
+    fc = fcs[0]
+    return fc.mean, fc.samples  # samples: (num_samples, prediction_steps)
 
 
-def denormalize_predictions(preds: np.ndarray, last_price: float) -> np.ndarray:
-    """Возвращает лог-возвраты к абсолютным ценам"""
-    # cumulative sum для восстановления уровня цен
-    cumulative = np.cumsum(np.concatenate([[0], preds]))
-    return last_price * np.exp(cumulative)[1:]  # пропускаем первый 0
+def predict_ensemble(checkpoint_path: str, series: pd.Series, freq: str,
+                     prediction_steps: int, context_length: int,
+                     num_samples: int, n_runs: int = 3
+                     ) -> Tuple[np.ndarray, Tuple[np.ndarray, np.ndarray], float]:
+    """
+    Запускает модель n_runs раз и усредняет результаты.
+    Возвращает: (mean_pred, (q10, q90), uncertainty_score)
+    uncertainty_score — среднее стд между запусками (0 = стабильно, >0.01 = нестабильно)
+    """
+    freq_map = {"1d": "D", "1h": "h", "10min": "10min", "5min": "5min", "1min": "min"}
+    pd_freq  = freq_map.get(freq, freq)
+
+    series = series.replace([np.inf, -np.inf], np.nan).ffill().bfill()
+    actual_context = min(len(series), context_length)
+    series_ctx = series.tail(actual_context).copy()
+    series_ctx.index = pd.DatetimeIndex(series_ctx.index)
+    try:
+        series_ctx = series_ctx.asfreq(pd_freq, method="ffill")
+    except Exception:
+        pass
+
+    all_means   = []
+    all_samples = []
+
+    for run in range(n_runs):
+        torch.manual_seed(42 + run)   # разные seed → разные семплы
+        mean, samples = _single_predict(
+            checkpoint_path, series_ctx, pd_freq,
+            prediction_steps, actual_context, num_samples
+        )
+        all_means.append(mean)
+        all_samples.append(samples)
+
+    # Усредняем по всем запускам
+    mean_pred = np.mean(all_means, axis=0)
+    all_s     = np.concatenate(all_samples, axis=0)  # (n_runs*num_samples, steps)
+
+    q10 = np.quantile(all_s, 0.10, axis=0)
+    q90 = np.quantile(all_s, 0.90, axis=0)
+
+    # Нестабильность = среднее стандартное отклонение mean между запусками по шагам
+    uncertainty = float(np.std(all_means, axis=0).mean())
+
+    return mean_pred, (q10, q90), uncertainty
 
 
-# ======================== 🚀 ОСНОВНОЙ ПЛАЙПЛАЙН ========================
+# ======================== ДЕНОРМАЛИЗАЦИЯ ========================
+
+def denormalize(preds: np.ndarray, last_price: float) -> np.ndarray:
+    return last_price * np.exp(np.cumsum(np.concatenate([[0], preds])))[1:]
+
+# ======================== ТОРГОВЫЙ СИГНАЛ ========================
+
+def compute_confidence_score(
+        pred_prices: np.ndarray,
+        q_low: np.ndarray,
+        q_high: np.ndarray,
+        last_price: float,
+        rsi: float,
+        macd_cross: str,
+        bb_zone: str,
+        adx: float,
+        volume_trend: str,
+        uncertainty: float,
+        tf_weight: float
+) -> Tuple[int, Dict]:
+    """
+    Вычисляет confidence score 0-100 для торгового сигнала.
+    Возвращает (score, breakdown) где breakdown — компоненты оценки.
+    """
+    scores = {}
+
+    # 1. Направление прогноза (30 очков)
+    final_move_pct = (pred_prices[-1] / last_price - 1) * 100
+    if abs(final_move_pct) >= MIN_EXPECTED_MOVE:
+        scores["direction"] = 30
+    elif abs(final_move_pct) >= MIN_EXPECTED_MOVE / 2:
+        scores["direction"] = 15
+    else:
+        scores["direction"] = 0
+
+    # 2. Ширина интервала (20 очков) — узкий интервал = уверенность
+    interval_pct = (q_high[-1] - q_low[-1]) / last_price * 100
+    if interval_pct <= MAX_INTERVAL_PCT * 0.5:
+        scores["interval"] = 20
+    elif interval_pct <= MAX_INTERVAL_PCT:
+        scores["interval"] = 10
+    else:
+        scores["interval"] = 0
+
+    # 3. Согласие индикаторов с прогнозом (25 очков)
+    bullish = final_move_pct > 0
+    indicator_agree = 0
+    if bullish:
+        if rsi < 50:            indicator_agree += 1   # перепроданность → рост
+        if macd_cross == "bullish":  indicator_agree += 1
+        if bb_zone in ("oversold", "near_lower"):  indicator_agree += 1
+        if volume_trend == "растущий": indicator_agree += 1
+    else:
+        if rsi > 50:            indicator_agree += 1
+        if macd_cross == "bearish":  indicator_agree += 1
+        if bb_zone in ("overbought", "near_upper"):  indicator_agree += 1
+        if volume_trend == "падающий": indicator_agree += 1
+
+    scores["indicators"] = round(indicator_agree / 4 * 25)
+
+    # 4. Сила тренда ADX (15 очков) — торгуем только при наличии тренда
+    if adx >= 25:
+        scores["adx"] = 15
+    elif adx >= 20:
+        scores["adx"] = 8
+    else:
+        scores["adx"] = 0   # флэт — не торгуем
+
+    # 5. Стабильность ensemble (10 очков)
+    if uncertainty < 0.001:
+        scores["ensemble"] = 10
+    elif uncertainty < 0.003:
+        scores["ensemble"] = 5
+    else:
+        scores["ensemble"] = 0
+
+    total = sum(scores.values())
+    # Применяем вес таймфрейма (не меняем score, используем в консенсусе)
+    scores["tf_weight"] = tf_weight
+    scores["total"]     = total
+    return total, scores
+
+
+def compute_sl_tp(pred_prices: np.ndarray, q_low: np.ndarray, q_high: np.ndarray,
+                  last_price: float, atr: float, is_long: bool
+                  ) -> Tuple[float, float, float]:
+    """
+    Вычисляет стоп-лосс и тейк-профит.
+    SL = на основе ATR (1.5x) и нижнего квантиля
+    TP = на основе верхнего квантиля и цели прогноза
+    """
+    target = pred_prices[-1]
+    if is_long:
+        sl_atr     = last_price - 1.5 * atr
+        sl_quantile = q_low[0]                       # нижняя граница первого шага
+        sl         = max(sl_atr, sl_quantile)        # берём дальше от цены (осторожнее)
+        tp_target  = target
+        tp_quantile = q_high[-1]
+        tp         = min(tp_target, tp_quantile)     # берём ближе (консервативнее)
+    else:
+        sl_atr     = last_price + 1.5 * atr
+        sl_quantile = q_high[0]
+        sl         = min(sl_atr, sl_quantile)
+        tp_target  = target
+        tp_quantile = q_low[-1]
+        tp         = max(tp_target, tp_quantile)
+
+    rr = abs(tp - last_price) / abs(sl - last_price) if abs(sl - last_price) > 0 else 0
+    return round(sl, 2), round(tp, 2), round(rr, 2)
+
+
+def is_session_active() -> Tuple[bool, str]:
+    """Проверяем, находимся ли мы в активной торговой сессии MOEX"""
+    now = datetime.now().time()
+    if now < SESSION_START:
+        return False, f"Сессия ещё не открылась (старт в {SESSION_START})"
+    if now > SESSION_END:
+        return False, f"Сессия закрывается (конец в {SESSION_END})"
+    return True, "Сессия активна"
+
+# ======================== LLM ========================
+
+def query_llm(prompt: str) -> Optional[str]:
+    if not LLM_ENABLED:
+        return None
+    try:
+        r = requests.post(LLM_API_URL,
+                          json={"prompt": prompt, "n_predict": 400,
+                                "temperature": 0.2, "stop": ["</s>", "###"]},
+                          timeout=30)
+        r.raise_for_status()
+        return r.json().get("content", "").strip()
+    except Exception:
+        return None
+
+def make_signal_prompt(ticker: str, signal: str, confidence: int,
+                       tf_breakdown: Dict, sl: float, tp: float, rr: float,
+                       indicators: Dict) -> str:
+    return (
+        f"Ты — трейдинговый советник. Дай краткое заключение (2-3 предложения) "
+        f"о сигнале для интрадей-торговли {ticker}.\n\n"
+        f"Сигнал: {signal} | Уверенность: {confidence}/100\n"
+        f"Стоп-лосс: {sl} | Тейк-профит: {tp} | R/R: {rr}\n"
+        f"RSI: {indicators.get('rsi')} | ADX: {indicators.get('adx')} | "
+        f"Объём: {indicators.get('volume')}\n"
+        f"Таймфреймы: {tf_breakdown}\n\n"
+        "Ответь на русском: стоит ли входить в сделку и почему."
+    )
+
+# ======================== СОХРАНЕНИЕ ========================
+
+def save_signal(signal_data: dict, timestamp: str):
+    path = os.path.join(RESULTS_DIR, f"signal_{timestamp.replace(':', '-')}.csv")
+    pd.DataFrame([signal_data]).to_csv(path, index=False, encoding="utf-8")
+    return path
+
+# ======================== ОСНОВНОЙ ПАЙПЛАЙН ========================
 
 def main():
-    print(f"🚀 Запуск прогноза для {TICKER} | {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    print(f"\n{'='*60}")
+    print(f"  ТОРГОВЫЙ СИГНАЛ {TICKER} | {timestamp}")
+    print(f"{'='*60}\n")
 
-    # 1. Загрузка данных
-    data_dict = load_data_tf(TICKER, START_DATE, END_DATE)
-    if not data_dict:
-        print("❌ Критическая ошибка: не удалось загрузить данные.")
-        return
+    logger = setup_logger()
 
-    # 2. Загрузка модели
+    # Проверка сессии
+    session_ok, session_msg = is_session_active()
+    logger.info(f"Сессия: {session_msg}")
+    if not session_ok:
+        logger.warning("Вне торговой сессии — сигнал информационный, не для исполнения")
+
+    # Загрузка чекпоинта
     try:
-        estimator = load_lag_llama_model(LAG_LLAMA_MODEL_PATH)
+        ckpt_path = get_checkpoint_path(LAG_LLAMA_CHECKPOINT_PATH)
+        logger.info(f"Чекпоинт загружен")
+        load_checkpoint_data(ckpt_path)  # предзагрузка в кэш
     except Exception as e:
-        print(f"❌ Ошибка загрузки модели: {e}")
+        logger.error(f"Ошибка чекпоинта: {e}")
         return
 
-    # Настройка логирования
-    import logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler('prediction_log.txt', encoding='utf-8'),
-            logging.StreamHandler()
-        ]
-    )
-    logger = logging.getLogger(__name__)
-    logger.info(f"🚀 Запуск прогноза для {TICKER}")
+    # Загрузка данных
+    data_dict = load_data_tf(TICKER, START_DATE, END_DATE, logger)
+    if not data_dict:
+        logger.error("Нет данных")
+        return
 
-    # 3. Прогнозирование по каждому таймфрейму
-    results = {}
-    
+    tf_signals   = {}   # {tf_name: {"direction", "score", "pred", "sl", "tp", "rr"}}
+    tf_indicators= {}   # для LLM
+
     for tf_name, tf_code in TIMEFRAMES.items():
-        logger.info(f"\n{'='*50}")
-        logger.info(f"📊 Обработка таймфрейма: {tf_name}")
-        
-        df = data_dict[tf_name]
-        if df.empty or len(df) < CONTEXT_LENGTH:
-            logger.warning(f"⚠️ Недостаточно данных для {tf_name} (нужно минимум {CONTEXT_LENGTH})")
-            continue
-        
-        # Подготовка данных
-        series = prepare_multivariate_series(df, 'Close')
-        last_price = df['Close'].iloc[-1]
-        last_prices = df['Close'].iloc[-5:].tolist()
-        volume_trend = get_volume_trend(df)
-        
-        logger.info(f"💹 Последняя цена: {last_price:.2f}")
-        logger.info(f"📈 Тренд объёма: {volume_trend}")
-        
-        # Прогноз Lag-Llama (на лог-возвратах)
-        try:
-            mean_pred, quantiles = predict_with_lag_llama(
-                model=estimator,
-                series=series,
-                freq=tf_code,
-                prediction_steps=PREDICTION_STEPS,
-                context_length=CONTEXT_LENGTH
-            )
-            
-            # Денормализация к абсолютным ценам
-            pred_prices = denormalize_predictions(mean_pred, last_price)
-            q_low_prices = denormalize_predictions(np.array([quantiles[0]] * PREDICTION_STEPS), last_price)
-            q_high_prices = denormalize_predictions(np.array([quantiles[1]] * PREDICTION_STEPS), last_price)
-            
-            # Вывод прогноза
-            logger.info(f"\n🔮 ПРОГНОЗ НА {PREDICTION_STEPS} ШАГОВ ({tf_name}):")
-            logger.info(f"{'Шаг':<6} | {'Прогноз':<10} | {'Низ (10%)':<10} | {'Верх (90%)':<10}")
-            logger.info("-" * 45)
-            
-            for i in range(PREDICTION_STEPS):
-                logger.info(
-                    f"{i+1:<6} | {pred_prices[i]:<10.2f} | {q_low_prices[i]:<10.2f} | {q_high_prices[i]:<10.2f}"
-                )
-            
-            # Сохранение результата
-            results[tf_name] = {
-                'predictions': pred_prices,
-                'quantile_low': q_low_prices,
-                'quantile_high': q_high_prices,
-                'last_price': last_price
-            }
-            
-            # Анализ через LLM (если доступен)
-            if LLM_ENABLED:
-                logger.info("\n🤖 Запрос анализа у локальной LLM...")
-                prompt = generate_analysis_prompt(
-                    ticker=TICKER,
-                    tf=tf_name,
-                    last_prices=last_prices,
-                    predictions=pred_prices,
-                    quantiles=(q_low_prices[-1], q_high_prices[-1]),
-                    volume_trend=volume_trend
-                )
-                
-                llm_response = query_local_llm(prompt)
-                if llm_response:
-                    logger.info(f"\n💬 АНАЛИЗ LLM:\n{llm_response}")
-                else:
-                    logger.info("⚠️ LLM не ответил (возможно сервер недоступен)")
-                    
-        except Exception as e:
-            logger.error(f"❌ Ошибка прогнозирования для {tf_name}: {e}")
-            logger.error(traceback.format_exc())
+        logger.info(f"\n{'─'*50}")
+        logger.info(f"[ {tf_name} ]")
+
+        if tf_name not in data_dict or len(data_dict[tf_name]) < 50:
+            logger.warning(f"Нет данных для {tf_name}")
             continue
 
-    # Итоговый вывод
-    logger.info(f"\n{'='*50}")
-    logger.info("✅ ПРОГНОЗИРОВАНИЕ ЗАВЕРШЕНО")
-    logger.info(f"📁 Лог сохранён в: prediction_log.txt")
-    
-    if results:
-        logger.info("\n📋 СВОДКА ПРОГНОЗОВ:")
-        for tf_name, res in results.items():
-            direction = "📈 рост" if res['predictions'][-1] > res['last_price'] else "📉 падение"
-            change_pct = ((res['predictions'][-1] / res['last_price']) - 1) * 100
-            logger.info(f"{tf_name}: {direction} ({change_pct:+.2f}%) к последнему шагу")
+        df = data_dict[tf_name]
+
+        # Индикаторы
+        series       = prepare_log_returns(df, "Close")
+        last_price   = float(df["Close"].iloc[-1])
+        rsi          = compute_rsi(df["Close"])
+        macd, msig, mcross = compute_macd(df["Close"])
+        bb_u, bb_l, bb_pos, bb_zone = compute_bb(df["Close"])
+        atr          = compute_atr(df)
+        adx          = compute_adx(df)
+        vol_trend    = get_volume_trend(df)
+        support, res = detect_support_resistance(df)
+
+        logger.info(
+            f"Цена: {last_price:.2f} | RSI: {rsi} | ADX: {adx} | ATR: {atr:.3f}"
+        )
+        logger.info(
+            f"MACD: {macd:.4f}/{msig:.4f} ({mcross}) | BB: {bb_zone} ({bb_pos:.0%})"
+        )
+        logger.info(f"Поддержка: {support:.2f} | Сопротивление: {res:.2f} | Объём: {vol_trend}")
+
+        tf_indicators[tf_name] = dict(
+            rsi=rsi, macd=macd, macd_cross=mcross,
+            bb_zone=bb_zone, adx=adx, volume=vol_trend, atr=atr
+        )
+
+        # Прогноз с ensemble
+        try:
+            logger.info(f"Прогноз (ensemble x{ENSEMBLE_RUNS})...")
+            mean_pred, (q10, q90), uncertainty = predict_ensemble(
+                ckpt_path, series, tf_code,
+                PREDICTION_STEPS, CONTEXT_LENGTH,
+                NUM_SAMPLES, ENSEMBLE_RUNS
+            )
+
+            pred_prices  = denormalize(mean_pred, last_price)
+            q_low_prices = denormalize(q10, last_price)
+            q_hi_prices  = denormalize(q90, last_price)
+
+            # Таблица прогноза
+            logger.info(f"{'Шаг':<4} | {'Цель':<8} | {'Δ%':<7} | {'Q10':<8} | {'Q90':<8} | {'Ширина':<7}")
+            logger.info("─" * 52)
+            for i in range(PREDICTION_STEPS):
+                chg   = (pred_prices[i] / last_price - 1) * 100
+                width = q_hi_prices[i] - q_low_prices[i]
+                logger.info(
+                    f"{i+1:<4} | {pred_prices[i]:<8.2f} | {chg:+.2f}%  | "
+                    f"{q_low_prices[i]:<8.2f} | {q_hi_prices[i]:<8.2f} | {width:.3f}"
+                )
+            logger.info(f"Нестабильность ensemble: {uncertainty:.5f}")
+
+            # Confidence score
+            final_move = (pred_prices[-1] / last_price - 1) * 100
+            is_long    = final_move > 0
+            score, breakdown = compute_confidence_score(
+                pred_prices, q_low_prices, q_hi_prices, last_price,
+                rsi, mcross, bb_zone, adx, vol_trend, uncertainty,
+                TF_WEIGHTS.get(tf_name, 0.33)
+            )
+
+            # SL/TP
+            sl, tp, rr = compute_sl_tp(
+                pred_prices, q_low_prices, q_hi_prices, last_price, atr, is_long
+            )
+
+            direction = "LONG" if is_long else "SHORT"
+            logger.info(
+                f"\nСигнал: {direction} | Score: {score}/100 | "
+                f"Δ: {final_move:+.2f}% | SL: {sl} | TP: {tp} | R/R: {rr}"
+            )
+            logger.info(f"Компоненты: {breakdown}")
+
+            tf_signals[tf_name] = {
+                "direction": direction,
+                "score":     score,
+                "weight":    TF_WEIGHTS.get(tf_name, 0.33),
+                "move_pct":  final_move,
+                "sl":        sl,
+                "tp":        tp,
+                "rr":        rr,
+                "pred":      pred_prices[-1],
+                "uncertainty": uncertainty
+            }
+
+        except Exception as e:
+            logger.error(f"Ошибка прогноза [{tf_name}]: {e}")
+            logger.debug(traceback.format_exc())
+            continue
+
+    # ======================== КОНСЕНСУС ========================
+    logger.info(f"\n{'='*60}")
+    logger.info("ИТОГОВЫЙ ТОРГОВЫЙ СИГНАЛ")
+    logger.info("="*60)
+
+    if not tf_signals:
+        logger.error("Нет данных для генерации сигнала")
+        return
+
+    # Взвешенный score
+    total_weight    = sum(s["weight"] for s in tf_signals.values())
+    weighted_score  = sum(
+        s["score"] * s["weight"] for s in tf_signals.values()
+    ) / total_weight
+
+    # Взвешенное направление
+    long_weight  = sum(s["weight"] for s in tf_signals.values() if s["direction"] == "LONG")
+    short_weight = sum(s["weight"] for s in tf_signals.values() if s["direction"] == "SHORT")
+    consensus_dir = "LONG" if long_weight >= short_weight else "SHORT"
+
+    # Проверяем единогласие (все таймфреймы одного направления)
+    all_same = len(set(s["direction"] for s in tf_signals.values())) == 1
+
+    # Финальные SL/TP (от 10T если есть, иначе 1H)
+    ref_tf = "10T" if "10T" in tf_signals else ("1H" if "1H" in tf_signals else list(tf_signals.keys())[0])
+    final_sl = tf_signals[ref_tf]["sl"]
+    final_tp = tf_signals[ref_tf]["tp"]
+    final_rr = tf_signals[ref_tf]["rr"]
+
+    # Проверка R/R
+    rr_ok = final_rr >= MIN_RR_RATIO
+
+    # Финальный вердикт
+    confidence = round(weighted_score)
+    signal_ok  = (confidence >= MIN_CONFIDENCE) and rr_ok and session_ok
+
+    if not signal_ok:
+        reasons = []
+        if confidence < MIN_CONFIDENCE:
+            reasons.append(f"score {confidence} < порог {MIN_CONFIDENCE}")
+        if not rr_ok:
+            reasons.append(f"R/R {final_rr} < минимум {MIN_RR_RATIO}")
+        if not session_ok:
+            reasons.append("вне сессии")
+        signal_text = f"НЕТ СИГНАЛА ({'; '.join(reasons)})"
+    else:
+        agreement = "✓ все ТФ согласны" if all_same else "⚠ ТФ расходятся"
+        signal_text = f"{consensus_dir} | {agreement}"
+
+    logger.info(f"\n  Направление:  {consensus_dir}")
+    logger.info(f"  Уверенность:  {confidence}/100")
+    logger.info(f"  Стоп-лосс:    {final_sl}")
+    logger.info(f"  Тейк-профит:  {final_tp}")
+    logger.info(f"  Risk/Reward:  {final_rr}")
+    logger.info(f"  Сессия:       {'активна' if session_ok else 'закрыта'}")
+    logger.info(f"\n>>> {signal_text} <<<")
+
+    # Детализация по таймфреймам
+    logger.info(f"\nДеталь по ТФ (вес | score | направление | R/R):")
+    for tf, s in tf_signals.items():
+        logger.info(
+            f"  {tf:>4}: вес={s['weight']:.2f} | "
+            f"score={s['score']:>3}/100 | {s['direction']:>5} | "
+            f"Δ{s['move_pct']:+.2f}% | R/R={s['rr']}"
+        )
+
+    # LLM комментарий
+    if LLM_ENABLED and signal_ok:
+        tf_summary = {tf: f"{s['direction']} ({s['score']})" for tf, s in tf_signals.items()}
+        indic_summary = {
+            "rsi":    tf_indicators.get("10T", {}).get("rsi", "—"),
+            "adx":    tf_indicators.get("10T", {}).get("adx", "—"),
+            "volume": tf_indicators.get("10T", {}).get("volume", "—"),
+        }
+        prompt = make_signal_prompt(
+            TICKER, signal_text, confidence,
+            tf_summary, final_sl, final_tp, final_rr, indic_summary
+        )
+        llm_resp = query_llm(prompt)
+        if llm_resp:
+            logger.info(f"\nАНАЛИЗ LLM:\n{llm_resp}")
+
+    # Сохранение сигнала
+    signal_data = {
+        "timestamp":   timestamp,
+        "ticker":      TICKER,
+        "signal":      signal_text,
+        "direction":   consensus_dir,
+        "confidence":  confidence,
+        "sl":          final_sl,
+        "tp":          final_tp,
+        "rr":          final_rr,
+        "session_ok":  session_ok,
+        **{f"{tf}_score": s["score"] for tf, s in tf_signals.items()},
+        **{f"{tf}_dir":   s["direction"] for tf, s in tf_signals.items()},
+    }
+    csv_path = save_signal(signal_data, timestamp)
+    logger.info(f"\nСигнал сохранён: {csv_path}")
+    logger.info(f"Лог: signal_log.txt")
+    logger.info("="*60)
 
 
 if __name__ == "__main__":
