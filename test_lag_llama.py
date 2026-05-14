@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Прогнозирование SNGS + генерация торгового сигнала для интрадей-робота.
+Прогнозирование + генерация торгового сигнала для интрадей-робота.
 
 Улучшения для надёжного сигнала:
   1. Мультитаймфреймовый консенсус с весами (10T > 1H > 1D для интрадей)
@@ -521,13 +521,37 @@ def save_signal(signal_data: dict, timestamp: str):
 
 # ======================== ОСНОВНОЙ ПАЙПЛАЙН ========================
 
-def main():
+def main(ticker: str = None, return_signal: bool = False, logger: logging.Logger = None) -> Optional[dict]:
+    """
+    Основной пайплайн генерации торгового сигнала.
+    
+    Args:
+        ticker: Тикер инструмента (по умолчанию используется глобальный TICKER)
+        return_signal: Если True, возвращает dict сигнала вместо логирования
+        logger: Логгер для вывода (по умолчанию создаётся новый)
+    
+    Returns:
+        dict с сигналом если return_signal=True, иначе None
+    """
+    global TICKER
+    
+    # Используем переданный тикер или глобальный
+    if ticker:
+        TICKER = ticker
+    
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    print(f"\n{'='*60}")
-    print(f"  ТОРГОВЫЙ СИГНАЛ {TICKER} | {timestamp}")
-    print(f"{'='*60}\n")
-
-    logger = setup_logger()
+    
+    # Создаём логгер если не передан
+    if logger is None:
+        logger = setup_logger()
+        print_header = True
+    else:
+        print_header = False
+    
+    if print_header:
+        print(f"\n{'='*60}")
+        print(f"  ТОРГОВЫЙ СИГНАЛ {TICKER} | {timestamp}")
+        print(f"{'='*60}\n")
 
     # Проверка сессии
     session_ok, session_msg = is_session_active()
@@ -734,15 +758,14 @@ def main():
 
     # Сохранение сигнала
     signal_data = {
-        "timestamp":   timestamp,
         "ticker":      TICKER,
         "signal":      signal_text,
-        "direction":   consensus_dir,
         "confidence":  confidence,
         "sl":          final_sl,
         "tp":          final_tp,
         "rr":          final_rr,
         "session_ok":  session_ok,
+        "timestamp":   timestamp,
         **{f"{tf}_score": s["score"] for tf, s in tf_signals.items()},
         **{f"{tf}_dir":   s["direction"] for tf, s in tf_signals.items()},
     }
@@ -750,6 +773,23 @@ def main():
     logger.info(f"\nСигнал сохранён: {csv_path}")
     logger.info(f"Лог: signal_log.txt")
     logger.info("="*60)
+    
+    # Возвращаем сигнал если запрошено
+    if return_signal:
+        # Формируем упрощённый dict для возврата
+        result = {
+            "ticker": TICKER,
+            "signal": signal_text,
+            "confidence": confidence,
+            "sl": final_sl,
+            "tp": final_tp,
+            "rr": final_rr,
+            "session_ok": session_ok,
+            "timestamp": timestamp
+        }
+        return result
+    
+    return None
 
 
 if __name__ == "__main__":
