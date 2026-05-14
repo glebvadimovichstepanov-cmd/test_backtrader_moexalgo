@@ -545,12 +545,31 @@ def is_session_active() -> Tuple[bool, str]:
 
 # ======================== LLM ========================
 
-def query_llm(prompt: str) -> Optional[str]:
+def query_llm(prompt: str, language: str = "russian") -> Optional[str]:
+    """
+    Запрос к локальной LLM.
+    
+    Args:
+        prompt: Текст запроса
+        language: Язык ответа ('russian', 'english')
+    
+    Returns:
+        Ответ LLM или None при ошибке
+    """
     if not LLM_ENABLED:
         return None
+    
+    # Добавляем инструкцию о языке в начало промпта
+    lang_instruction = {
+        "russian": "Отвечай ТОЛЬКО на русском языке.",
+        "english": "Answer ONLY in English."
+    }
+    
+    full_prompt = f"{lang_instruction.get(language, lang_instruction['russian'])}\n\n{prompt}"
+    
     try:
         r = requests.post(LLM_API_URL,
-                          json={"prompt": prompt, "n_predict": 400,
+                          json={"prompt": full_prompt, "n_predict": 400,
                                 "temperature": 0.2, "stop": ["</s>", "###"]},
                           timeout=30)
         r.raise_for_status()
@@ -770,7 +789,9 @@ def main(ticker: str = None, return_signal: bool = False, logger: logging.Logger
     confidence = round(weighted_score)
     signal_ok  = (confidence >= MIN_CONFIDENCE) and rr_ok and session_ok
 
+    # Определяем чистое направление для заявки
     if not signal_ok:
+        signal_direction = "НЕТ СИГНАЛА"
         reasons = []
         if confidence < MIN_CONFIDENCE:
             reasons.append(f"score {confidence} < порог {MIN_CONFIDENCE}")
@@ -780,6 +801,7 @@ def main(ticker: str = None, return_signal: bool = False, logger: logging.Logger
             reasons.append("вне сессии")
         signal_text = f"НЕТ СИГНАЛА ({'; '.join(reasons)})"
     else:
+        signal_direction = consensus_dir  # Чистое направление: LONG или SHORT
         agreement = "✓ все ТФ согласны" if all_same else "⚠ ТФ расходятся"
         signal_text = f"{consensus_dir} | {agreement}"
 
@@ -836,10 +858,10 @@ def main(ticker: str = None, return_signal: bool = False, logger: logging.Logger
     
     # Возвращаем сигнал если запрошено
     if return_signal:
-        # Формируем упрощённый dict для возврата
+        # Формируем упрощённый dict для возврата с чистым направлением
         result = {
             "ticker": TICKER,
-            "signal": signal_text,
+            "signal": signal_direction,  # Чистое направление: LONG, SHORT или НЕТ СИГНАЛА
             "confidence": confidence,
             "sl": final_sl,
             "tp": final_tp,
