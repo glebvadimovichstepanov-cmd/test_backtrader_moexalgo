@@ -888,20 +888,24 @@ def main(ticker: str = None, return_signal: bool = False, logger: logging.Logger
         chart_df = None
         entry_price = 0.0
         
-        if data_dict and '15min' in data_dict:
-            chart_data = data_dict['15min'].copy()
-            # Получаем цену входа (последняя цена закрытия)
-            entry_price = float(chart_data['Close'].iloc[-1])
-            
-            # Преобразуем в нужный формат для GUI
-            chart_df = pd.DataFrame({
-                'time': chart_data.index,
-                'open': chart_data['Open'].values,
-                'high': chart_data['High'].values,
-                'low': chart_data['Low'].values,
-                'close': chart_data['Close'].values,
-                'volume': chart_data['Volume'].values
-            })
+        try:
+            if data_dict and '15min' in data_dict:
+                chart_data = data_dict['15min'].copy()
+                # Получаем цену входа (последняя цена закрытия)
+                entry_price = float(chart_data['Close'].iloc[-1])
+                
+                # Преобразуем в нужный формат для GUI
+                chart_df = pd.DataFrame({
+                    'time': chart_data.index,
+                    'open': chart_data['Open'].values,
+                    'high': chart_data['High'].values,
+                    'low': chart_data['Low'].values,
+                    'close': chart_data['Close'].values,
+                    'volume': chart_data['Volume'].values
+                })
+        except Exception as e:
+            print(f"Предупреждение: Не удалось подготовить данные графика: {e}")
+            chart_df = None
         
         result = {
             "ticker": TICKER,
