@@ -1,1 +1,4 @@
-Nothing should be ignored based on the provided file changes. The modification of 'main.py' represents a source code file change, which does not warrant any new ignore rules in the .gitignore file.
+```
+__pycache__/
+*.pyc
+```

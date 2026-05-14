@@ -84,6 +84,7 @@ MIN_CONFIDENCE    = 60    # минимальный score 0-100 для входа
 MIN_EXPECTED_MOVE = 0.15  # минимальное ожидаемое движение в % (иначе шум)
 MAX_INTERVAL_PCT  = 2.0   # максимальная ширина интервала в % от цены
 MIN_RR_RATIO      = 1.5   # минимальный Risk/Reward
+MIN_PROFIT_PCT    = 0.9   # минимальный прогноз profit в % для входа
 
 # Торговая сессия MOEX
 SESSION_START = dtime(10, 30)   # не входим в первые 30 мин
@@ -666,9 +667,17 @@ def main(ticker: str = None, return_signal: bool = False, logger: logging.Logger
 
         df = data_dict[tf_name]
 
+        # Последняя загруженная свеча
+        last_candle_time = df.index[-1]
+        last_candle_open = float(df["Open"].iloc[-1])
+        last_candle_high = float(df["High"].iloc[-1])
+        last_candle_low = float(df["Low"].iloc[-1])
+        last_candle_close = float(df["Close"].iloc[-1])
+        last_candle_volume = int(df["Volume"].iloc[-1])
+
         # Индикаторы
         series       = prepare_log_returns(df, "Close")
-        last_price   = float(df["Close"].iloc[-1])
+        last_price   = last_candle_close
         rsi          = compute_rsi(df["Close"])
         macd, msig, mcross = compute_macd(df["Close"])
         bb_u, bb_l, bb_pos, bb_zone = compute_bb(df["Close"])
@@ -677,6 +686,9 @@ def main(ticker: str = None, return_signal: bool = False, logger: logging.Logger
         vol_trend    = get_volume_trend(df)
         support, res = detect_support_resistance(df)
 
+        logger.info(
+            f"Последняя свеча ({last_candle_time}): O={last_candle_open:.2f} H={last_candle_high:.2f} L={last_candle_low:.2f} C={last_candle_close:.2f} V={last_candle_volume}"
+        )
         logger.info(
             f"Цена: {last_price:.2f} | RSI: {rsi} | ADX: {adx} | ATR: {atr:.3f}"
         )
@@ -788,7 +800,7 @@ def main(ticker: str = None, return_signal: bool = False, logger: logging.Logger
     # Проверка минимального прогнозного profit (не менее 0.9%)
     ref_signal = tf_signals[ref_tf]
     predicted_profit_pct = abs(ref_signal["move_pct"])
-    min_profit_threshold = 0.9  # Минимальный прогноз profit в %
+    min_profit_threshold = MIN_PROFIT_PCT  # Минимальный прогноз profit в %
     profit_ok = predicted_profit_pct >= min_profit_threshold
 
     # Финальный вердикт
