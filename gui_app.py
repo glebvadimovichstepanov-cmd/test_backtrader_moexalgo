@@ -406,13 +406,14 @@ class TradingGUI:
     
     def _update_chart(self, signal: Dict[str, Any]):
         """
-        Отрисовка графика цены с уровнями SL/TP и точкой входа
+        Отрисовка графика: исторические свечи + прогноз с TP/SL
         
         Args:
-            signal: Словарь с данными сигнала, включая chart_data (DataFrame с ценой)
+            signal: Словарь с данными сигнала, включая chart_data (DataFrame с OHLCV)
         """
         try:
             import pandas as pd
+            import matplotlib.dates as mdates
             
             chart_data = signal.get('chart_data')
             if chart_data is None or len(chart_data) == 0:
@@ -424,13 +425,15 @@ class TradingGUI:
             if isinstance(chart_data, pd.DataFrame):
                 df = chart_data.copy()
                 
-                # Определение колонок
-                price_col = 'close' if 'close' in df.columns else (df.columns[1] if len(df.columns) > 1 else df.columns[0])
+                # Проверка наличия необходимых колонок для свечей
+                required_cols = ['open', 'high', 'low', 'close']
+                has_ohlcv = all(col in df.columns for col in required_cols)
+                
+                # Определение колонки времени
                 time_col = 'time' if 'time' in df.columns else (df.columns[0] if len(df.columns) > 1 else None)
                 
                 if time_col:
                     x_values = df[time_col]
-                    # Преобразование времени в формат matplotlib
                     if pd.api.types.is_datetime64_any_dtype(x_values):
                         x_dates = x_values
                     else:
@@ -438,49 +441,96 @@ class TradingGUI:
                 else:
                     x_dates = range(len(df))
                 
-                y_values = df[price_col].values
+                # --- 1. Отрисовка исторических свечей ---
+                if has_ohlcv:
+                    for idx, row in df.iterrows():
+                        t = x_dates.iloc[idx] if hasattr(x_dates, 'iloc') else x_dates[idx]
+                        o, h, l, c = row['open'], row['high'], row['low'], row['close']
+                        
+                        # Цвет свечи
+                        color = '#26a69a' if c >= o else '#ef5350'
+                        height = c - o
+                        bottom = min(o, c)
+                        if abs(height) < 0.0001:
+                            height = 0.0001
+                        
+                        # Тело свечи
+                        self.ax.add_patch(plt.Rectangle((t, bottom), 0.8, height, 
+                                                       facecolor=color, edgecolor='black', linewidth=0.5))
+                        # Фитили
+                        self.ax.plot([t, t], [l, h], color='black', linewidth=0.8)
+                else:
+                    # Если нет OHLCV, рисуем просто линию цены
+                    price_col = 'close' if 'close' in df.columns else df.columns[-1]
+                    y_values = df[price_col].values
+                    self.ax.plot(x_dates, y_values, 'b-', linewidth=1.5, label='Цена')
                 
-                # Отрисовка цены
-                self.ax.plot(x_dates, y_values, 'b-', linewidth=1.5, label='Цена')
+                # Последняя цена и время
+                last_idx = -1
+                last_time = x_dates.iloc[last_idx] if hasattr(x_dates, 'iloc') else x_dates[last_idx]
+                last_close = df['close'].iloc[last_idx] if 'close' in df.columns else df.iloc[last_idx, -1]
                 
-                # Получение параметров сигнала
-                entry_price = signal.get('entry_price')
-                sl = signal.get('sl')
+                # --- 2. Отрисовка прогноза и уровней ---
+                entry_price = signal.get('entry_price', last_close)
                 tp = signal.get('tp')
-                direction = signal.get('signal', '')
+                sl = signal.get('sl')
+                direction = signal.get('signal', signal.get('direction', ''))
+                confidence = signal.get('confidence', 0)
                 
-                # Отрисовка уровней
-                if entry_price:
-                    self.ax.axhline(y=entry_price, color='gray', linestyle='--', linewidth=1.5, label=f'Вход: {entry_price:.4f}')
-                    self.ax.scatter(x_dates.iloc[-1] if hasattr(x_dates, 'iloc') else x_dates[-1], 
-                                   entry_price, color='gray', s=100, zorder=5)
+                # Прогнозируемая точка (сдвиг в будущее)
+                if hasattr(last_time, 'timestamp'):
+                    future_time = last_time + pd.Timedelta(minutes=15)  # Сдвиг на 1 бар (15 мин)
+                else:
+                    future_time = last_time + 1
                 
-                if sl and entry_price:
-                    color_sl = 'red' if direction == 'BUY' else 'green'
+                if tp:
+                    # Цвет TP
+                    color_tp = '#26a69a' if direction == 'BUY' or direction == 'LONG' else '#ef5350'
+                    self.ax.axhline(y=tp, color=color_tp, linestyle='--', linewidth=2, label=f'TP: {tp:.4f}')
+                    # Область между входом и TP
+                    self.ax.fill_between([last_time, future_time], [entry_price, tp], alpha=0.15, color=color_tp)
+                
+                if sl:
+                    # Цвет SL
+                    color_sl = '#ef5350' if direction == 'BUY' or direction == 'LONG' else '#26a69a'
                     self.ax.axhline(y=sl, color=color_sl, linestyle='-.', linewidth=2, label=f'SL: {sl:.4f}')
                 
-                if tp and entry_price:
-                    color_tp = 'green' if direction == 'BUY' else 'red'
-                    self.ax.axhline(y=tp, color=color_tp, linestyle='-.', linewidth=2, label=f'TP: {tp:.4f}')
+                # Точка входа
+                self.ax.scatter(last_time, entry_price, color='blue', s=150, zorder=5, marker='*', 
+                               label=f'Вход: {entry_price:.4f}')
                 
-                # Форматирование осей
-                self.ax.set_title(f"{signal.get('ticker', '')} - {direction} Signal", fontsize=12, fontweight='bold')
+                # Линия прогноза (от входа к TP)
+                if tp:
+                    self.ax.plot([last_time, future_time], [entry_price, tp], color='blue', 
+                                linewidth=2, linestyle=':', alpha=0.7)
+                    # Подпись прогноза
+                    label_text = f"Прогноз ({direction})\nConf: {confidence:.1f}%"
+                    self.ax.text(future_time, tp, label_text, fontsize=9, ha='left',
+                                bbox=dict(facecolor='white', alpha=0.8, edgecolor='blue', boxstyle='round,pad=0.5'))
+                
+                # --- Оформление ---
+                ticker = signal.get('ticker', '')
+                self.ax.set_title(f"{ticker} - {direction} | Прогноз и Уровни", fontsize=12, fontweight='bold')
                 self.ax.set_xlabel("Время", fontsize=10)
                 self.ax.set_ylabel("Цена", fontsize=10)
-                self.ax.grid(True, alpha=0.3)
+                self.ax.grid(True, which='both', linestyle='--', alpha=0.5)
                 self.ax.legend(loc='upper left', fontsize=9)
                 
-                # Поворот подписей дат
+                # Форматирование дат
                 if hasattr(x_dates, 'dtype') and pd.api.types.is_datetime64_any_dtype(x_dates):
+                    self.ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+                    self.ax.xaxis.set_major_locator(mdates.AutoDateLocator())
                     plt.setp(self.ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
                 
                 self.fig.tight_layout()
             
-            # Перерисовка canvas
+            # Перерисовка
             self.canvas.draw_idle()
             
         except Exception as e:
             self.logger.error(f"Ошибка отрисовки графика: {e}")
+            import traceback
+            self.logger.debug(traceback.format_exc())
     
     def _get_signal_threaded(self):
         """Запуск получения сигнала в отдельном потоке"""
