@@ -884,6 +884,20 @@ def main(ticker: str = None, return_signal: bool = False, logger: logging.Logger
     # Возвращаем сигнал если запрошено
     if return_signal:
         # Формируем упрощённый dict для возврата с чистым направлением
+        # Добавляем данные графика с последнего таймфрейма для визуализации
+        chart_df = None
+        if data_dict and '15min' in data_dict:
+            chart_data = data_dict['15min'].copy()
+            # Преобразуем в нужный формат для GUI
+            chart_df = pd.DataFrame({
+                'time': chart_data.index,
+                'open': chart_data['Open'].values,
+                'high': chart_data['High'].values,
+                'low': chart_data['Low'].values,
+                'close': chart_data['Close'].values,
+                'volume': chart_data['Volume'].values
+            })
+        
         result = {
             "ticker": TICKER,
             "signal": signal_direction,  # Чистое направление: LONG, SHORT или НЕТ СИГНАЛА
@@ -893,7 +907,8 @@ def main(ticker: str = None, return_signal: bool = False, logger: logging.Logger
             "rr": final_rr,
             "session_ok": session_ok,
             "timestamp": timestamp,
-            "predicted_profit_pct": predicted_profit_pct
+            "predicted_profit_pct": predicted_profit_pct,
+            "chart_data": chart_df  # Данные для графика
         }
         return result
     

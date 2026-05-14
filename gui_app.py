@@ -22,6 +22,12 @@ from typing import Optional, Dict, Any
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, filedialog
 
+# Матplotlib для графиков
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+from matplotlib.figure import Figure
+import matplotlib.dates as mdates
+
 # Импорт основной логики
 import test_lag_llama
 from main import (
@@ -152,8 +158,9 @@ class TradingGUI:
         self._create_settings_frame(left_panel)
         
         # Создание виджетов правой панели
-        self._create_signal_display(right_panel)
-        self._create_log_console(right_panel)
+        self._create_chart_area(right_panel)  # График сверху
+        self._create_signal_display(right_panel)  # Параметры сигнала
+        self._create_log_console(right_panel)  # Логи снизу
     
     def _create_ticker_input(self, parent):
         """Создание поля ввода тикера"""
@@ -209,6 +216,32 @@ class TradingGUI:
         ttk.Label(settings_frame, text="Min Profit (%):").grid(row=2, column=0, sticky="w", pady=5)
         self.min_profit_var = tk.DoubleVar(value=MIN_PROFIT_PCT)
         ttk.Spinbox(settings_frame, from_=0.1, to=10.0, increment=0.1, textvariable=self.min_profit_var, width=10).grid(row=2, column=1, sticky="w", pady=5)
+    
+    def _create_chart_area(self, parent):
+        """Создание области для графика цены с индикаторами"""
+        chart_frame = ttk.LabelFrame(parent, text="График цены и сигнал", padding="5")
+        chart_frame.pack(fill="both", expand=True, padx=0, pady=(0, 10))
+        
+        # Создание фигуры matplotlib
+        self.fig = Figure(figsize=(8, 4), dpi=100)
+        self.ax = self.fig.add_subplot(111)
+        self.ax.set_title("Цена инструмента", fontsize=12)
+        self.ax.set_xlabel("Время", fontsize=10)
+        self.ax.set_ylabel("Цена", fontsize=10)
+        self.ax.grid(True, alpha=0.3)
+        
+        # Встраивание графика в tkinter
+        self.canvas = FigureCanvasTkAgg(self.fig, master=chart_frame)
+        self.canvas.get_tk_widget().pack(fill="both", expand=True)
+        
+        # Панель инструментов (масштабирование, сохранение)
+        toolbar_frame = ttk.Frame(chart_frame)
+        toolbar_frame.pack(fill="x", pady=(5, 0))
+        self.toolbar = NavigationToolbar2Tk(self.canvas, toolbar_frame)
+        self.toolbar.update()
+        
+        # Инициализация пустых данных
+        self.chart_data = None
     
     def _create_signal_display(self, parent):
         """Создание панели отображения сигнала"""
@@ -344,7 +377,7 @@ class TradingGUI:
         self.log_console.tag_config(color, foreground=color)
     
     def _update_signal_display(self, signal: Dict[str, Any]):
-        """Обновление отображения сигнала"""
+        """Обновление отображения сигнала и графика"""
         mappings = {
             'ticker': signal.get('ticker', '-'),
             'direction': signal.get('signal', '-'),
@@ -366,6 +399,88 @@ class TradingGUI:
                     self.signal_labels[key].config(foreground=self.colors['success'])
                 else:
                     self.signal_labels[key].config(foreground=self.colors['danger'])
+        
+        # Обновление графика с данными из сигнала
+        if 'chart_data' in signal:
+            self._update_chart(signal)
+    
+    def _update_chart(self, signal: Dict[str, Any]):
+        """
+        Отрисовка графика цены с уровнями SL/TP и точкой входа
+        
+        Args:
+            signal: Словарь с данными сигнала, включая chart_data (DataFrame с ценой)
+        """
+        try:
+            import pandas as pd
+            
+            chart_data = signal.get('chart_data')
+            if chart_data is None or len(chart_data) == 0:
+                return
+            
+            self.ax.clear()
+            
+            # Получение данных
+            if isinstance(chart_data, pd.DataFrame):
+                df = chart_data.copy()
+                
+                # Определение колонок
+                price_col = 'close' if 'close' in df.columns else (df.columns[1] if len(df.columns) > 1 else df.columns[0])
+                time_col = 'time' if 'time' in df.columns else (df.columns[0] if len(df.columns) > 1 else None)
+                
+                if time_col:
+                    x_values = df[time_col]
+                    # Преобразование времени в формат matplotlib
+                    if pd.api.types.is_datetime64_any_dtype(x_values):
+                        x_dates = x_values
+                    else:
+                        x_dates = pd.to_datetime(x_values, errors='coerce')
+                else:
+                    x_dates = range(len(df))
+                
+                y_values = df[price_col].values
+                
+                # Отрисовка цены
+                self.ax.plot(x_dates, y_values, 'b-', linewidth=1.5, label='Цена')
+                
+                # Получение параметров сигнала
+                entry_price = signal.get('entry_price')
+                sl = signal.get('sl')
+                tp = signal.get('tp')
+                direction = signal.get('signal', '')
+                
+                # Отрисовка уровней
+                if entry_price:
+                    self.ax.axhline(y=entry_price, color='gray', linestyle='--', linewidth=1.5, label=f'Вход: {entry_price:.4f}')
+                    self.ax.scatter(x_dates.iloc[-1] if hasattr(x_dates, 'iloc') else x_dates[-1], 
+                                   entry_price, color='gray', s=100, zorder=5)
+                
+                if sl and entry_price:
+                    color_sl = 'red' if direction == 'BUY' else 'green'
+                    self.ax.axhline(y=sl, color=color_sl, linestyle='-.', linewidth=2, label=f'SL: {sl:.4f}')
+                
+                if tp and entry_price:
+                    color_tp = 'green' if direction == 'BUY' else 'red'
+                    self.ax.axhline(y=tp, color=color_tp, linestyle='-.', linewidth=2, label=f'TP: {tp:.4f}')
+                
+                # Форматирование осей
+                self.ax.set_title(f"{signal.get('ticker', '')} - {direction} Signal", fontsize=12, fontweight='bold')
+                self.ax.set_xlabel("Время", fontsize=10)
+                self.ax.set_ylabel("Цена", fontsize=10)
+                self.ax.grid(True, alpha=0.3)
+                self.ax.legend(loc='upper left', fontsize=9)
+                
+                # Поворот подписей дат
+                if hasattr(x_dates, 'dtype') and pd.api.types.is_datetime64_any_dtype(x_dates):
+                    plt.setp(self.ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+                
+                self.fig.tight_layout()
+            
+            # Перерисовка canvas
+            self.canvas.draw_idle()
+            
+        except Exception as e:
+            self.logger.error(f"Ошибка отрисовки графика: {e}")
     
     def _get_signal_threaded(self):
         """Запуск получения сигнала в отдельном потоке"""
