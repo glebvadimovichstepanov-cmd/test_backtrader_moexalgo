@@ -312,7 +312,7 @@ def get_figi_with_moex_store(ticker: str, token: str, logger: logging.Logger) ->
 
 def place_order(signal: dict, figi: str, token: str, account_id: str, logger: logging.Logger) -> bool:
     """
-    Выставить заявку по сигналу.
+    Выставить заявку по сигналу и установить SL/TP.
     
     Args:
         signal: dict с данными сигнала
@@ -324,13 +324,17 @@ def place_order(signal: dict, figi: str, token: str, account_id: str, logger: lo
     Returns:
         True если заявка успешно выставлена, иначе False
     """
+    from t_tech.invest import StopOrderDirection, StopOrderType, StopOrderExpirationType, Quotation
+    
     # Определяем направление
     if signal["signal"] == "LONG":
         direction = OrderDirection.ORDER_DIRECTION_BUY
         direction_str = "BUY"
+        stop_direction = StopOrderDirection.STOP_ORDER_DIRECTION_SELL
     elif signal["signal"] == "SHORT":
         direction = OrderDirection.ORDER_DIRECTION_SELL
         direction_str = "SELL"
+        stop_direction = StopOrderDirection.STOP_ORDER_DIRECTION_BUY
     else:
         logger.error(f"Неизвестный сигнал: {signal['signal']}")
         return False
@@ -350,9 +354,20 @@ def place_order(signal: dict, figi: str, token: str, account_id: str, logger: lo
             )
             
             order_id = response.order_id
-            logger.info(f"Заявка исполнена: order_id={order_id}")
-            logger.info(f"Статус: {response}")
-            return True
+            exec_status = response.execution_report_status
+            
+            # Статусы: 1=FILL, 2=PARTIALLY_FILL, 3=REJECTED, 4=CANCELLED, 5=NEW, 6=PENDING_NEW, etc.
+            if exec_status in [1, 2]:
+                logger.info(f"Заявка исполнена: order_id={order_id}")
+                exec_price = response.executed_order_price.units + response.executed_order_price.nano / 1e9
+                logger.info(f"Цена исполнения: {exec_price:.4f}")
+                
+                # Выставляем SL и TP
+                place_stop_orders(client, figi, account_id, signal, exec_price, stop_direction, logger)
+                return True
+            else:
+                logger.warning(f"Заявка не исполнилась мгновенно. Статус: {exec_status}")
+                return False
             
     except Exception as e:
         error_msg = str(e)
@@ -380,6 +395,92 @@ def place_order(signal: dict, figi: str, token: str, account_id: str, logger: lo
             logger.error(f"Ошибка при выставлении заявки: {e}")
         
         return False
+
+
+def place_stop_orders(client, figi: str, account_id: str, signal: dict, entry_price: float, 
+                      stop_direction: StopOrderDirection, logger: logging.Logger):
+    """
+    Выставить Stop-Loss и Take-Profit заявки.
+    
+    Args:
+        client: T-Invest клиент
+        figi: FIGI инструмента
+        account_id: ID счета
+        signal: dict с данными сигнала
+        entry_price: Цена входа в позицию
+        stop_direction: Направление стоп-заявки
+        logger: Логгер
+    """
+    from t_tech.invest import StopOrderType, StopOrderExpirationType, Quotation
+    
+    sl_price = signal["sl"]
+    tp_price = signal["tp"]
+    ticker = signal["ticker"]
+    
+    # Для LONG: stop_direction = SELL (продажа для закрытия)
+    # Для SHORT: stop_direction = BUY (покупка для закрытия)
+    is_long = stop_direction == StopOrderDirection.STOP_ORDER_DIRECTION_SELL
+    
+    if is_long:
+        # LONG позиция: SL ниже, TP выше
+        # Добавляем небольшой запас к цене активации для надежности
+        sl_activation_price = sl_price * 1.01  # +1% для активации SL
+        tp_activation_price = tp_price * 0.99   # -1% для активации TP
+        order_type_name = "Stop-Loss (продажа)"
+    else:
+        # SHORT позиция: SL выше, TP ниже
+        sl_activation_price = sl_price * 0.99   # -1% для активации SL
+        tp_activation_price = tp_price * 1.01   # +1% для активации TP
+        order_type_name = "Stop-Loss (покупка)"
+    
+    logger.info(f"Выставление защитных ордеров для {ticker}:")
+    logger.info(f"  Цена входа: {entry_price:.4f}")
+    logger.info(f"  SL: {sl_price:.4f} -> активация по {sl_activation_price:.4f}")
+    logger.info(f"  TP: {tp_price:.4f} -> активация по {tp_activation_price:.4f}")
+    
+    def make_quotation(price: float) -> Quotation:
+        """Создать Quotation из float цены"""
+        units = int(price)
+        nano = int((price - units) * 1e9)
+        return Quotation(units=units, nano=nano)
+    
+    try:
+        # Выставление Stop-Loss
+        logger.info(f"  → Выставление {order_type_name}...")
+        sl_response = client.stop_orders.post_stop_order(
+            figi=figi,
+            quantity=1,
+            price=0,  # Исполнение по рынку при активации
+            stop_price=make_quotation(sl_activation_price),
+            direction=stop_direction,
+            account_id=account_id,
+            expiration_type=StopOrderExpirationType.STOP_ORDER_EXPIRATION_TYPE_GOOD_TILL_CANCEL,
+            stop_order_type=StopOrderType.STOP_ORDER_TYPE_STOP_LOSS,
+            expire_date=None,
+            order_id=str(uuid.uuid4())
+        )
+        logger.info(f"  ✓ Stop-Loss установлен: id={sl_response.stop_order_id}")
+        
+        # Выставление Take-Profit
+        tp_type_name = "Take-Profit (продажа)" if is_long else "Take-Profit (покупка)"
+        logger.info(f"  → Выставление {tp_type_name}...")
+        tp_response = client.stop_orders.post_stop_order(
+            figi=figi,
+            quantity=1,
+            price=0,  # Исполнение по рынку при активации
+            stop_price=make_quotation(tp_activation_price),
+            direction=stop_direction,
+            account_id=account_id,
+            expiration_type=StopOrderExpirationType.STOP_ORDER_EXPIRATION_TYPE_GOOD_TILL_CANCEL,
+            stop_order_type=StopOrderType.STOP_ORDER_TYPE_TAKE_PROFIT,
+            expire_date=None,
+            order_id=str(uuid.uuid4())
+        )
+        logger.info(f"  ✓ Take-Profit установлен: id={tp_response.stop_order_id}")
+        
+    except Exception as e:
+        logger.error(f"  ✗ Ошибка при выставлении SL/TP: {e}")
+        logger.error("  Проверьте права доступа токена на работу со стоп-заявками.")
 
 
 def main():
