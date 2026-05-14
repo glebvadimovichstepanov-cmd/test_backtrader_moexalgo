@@ -120,7 +120,7 @@ def generate_signal(ticker: str, logger: logging.Logger) -> Optional[dict]:
             return None
         
         # Проверяем структуру сигнала
-        required_keys = ["ticker", "signal", "confidence", "sl", "tp", "rr", "session_ok", "timestamp"]
+        required_keys = ["ticker", "signal", "confidence", "sl", "tp", "rr", "session_ok", "timestamp", "predicted_profit_pct"]
         for key in required_keys:
             if key not in signal:
                 logger.error(f"В сигнале отсутствует ключ '{key}'")
@@ -160,6 +160,10 @@ def validate_signal(signal: dict) -> Tuple[bool, str]:
     # Проверка 4: активная сессия MOEX
     if not signal["session_ok"]:
         return False, "Торговая сессия MOEX не активна"
+    
+    # Проверка 5: прогноз profit >= 0.9%
+    if signal.get("predicted_profit_pct", 0) < 0.9:
+        return False, f"Прогноз profit {signal.get('predicted_profit_pct', 0):.2f}% ниже минимума 0.9%"
     
     return True, "OK"
 
@@ -340,18 +344,75 @@ def place_order(signal: dict, figi: str, token: str, account_id: str, logger: lo
         return False
     
     ticker = signal["ticker"]
-    logger.info(f"Выставка заявки {direction_str} 1 лот {ticker} по рынку...")
+    
+    # Оптимизация: выставляем лимитную заявку по цене 0.99 * price (на 1% лучше рынка)
+    # Получаем текущую цену для расчета лимита
+    try:
+        with Client(token) as client:
+            # Получаем последнюю цену через get_candles или last_price
+            # Для простоты используем market data
+            from t_tech.invest import CandleInterval
+            from datetime import datetime, timedelta
+            
+            # Запрашиваем последние свечи за 1 минуту для получения текущей цены
+            candles_response = client.market_data.get_candles(
+                figi=figi,
+                from_=datetime.now() - timedelta(minutes=1),
+                to=datetime.now(),
+                interval=CandleInterval.CANDLE_INTERVAL_1_MIN
+            )
+            
+            if hasattr(candles_response, 'candles') and candles_response.candles:
+                last_candle = candles_response.candles[-1]
+                current_price = last_candle.close.units + last_candle.close.nano / 1e9
+            else:
+                # Если нет свечей, будем использовать рыночный ордер
+                current_price = None
+                
+        if current_price:
+            # Лимитная цена: 0.99 * current_price для BUY, 1.01 * current_price для SELL
+            if direction == OrderDirection.ORDER_DIRECTION_BUY:
+                limit_price = current_price * 0.99
+                logger.info(f"Выставка лимитной заявки {direction_str} 1 лот {ticker} по цене {limit_price:.4f} (0.99 * market)")
+            else:
+                limit_price = current_price * 1.01
+                logger.info(f"Выставка лимитной заявки {direction_str} 1 лот {ticker} по цене {limit_price:.4f} (1.01 * market)")
+        else:
+            logger.info(f"Не удалось получить текущую цену, выставляем по рынку...")
+            limit_price = None
+            
+    except Exception as e:
+        logger.warning(f"Ошибка при получении цены: {e}, выставляем по рынку")
+        limit_price = None
     
     try:
         with Client(token) as client:
-            response = client.orders.post_order(
-                instrument_id=figi,
-                quantity=1,
-                direction=direction,
-                account_id=account_id,
-                order_type=OrderType.ORDER_TYPE_MARKET,
-                order_id=str(uuid.uuid4()),
-            )
+            if limit_price:
+                # Лимитная заявка
+                def make_quotation(price: float) -> Quotation:
+                    units = int(price)
+                    nano = int((price - units) * 1e9)
+                    return Quotation(units=units, nano=nano)
+                
+                response = client.orders.post_order(
+                    instrument_id=figi,
+                    quantity=1,
+                    direction=direction,
+                    account_id=account_id,
+                    order_type=OrderType.ORDER_TYPE_LIMIT,
+                    price=make_quotation(limit_price),
+                    order_id=str(uuid.uuid4()),
+                )
+            else:
+                # Рыночная заявка
+                response = client.orders.post_order(
+                    instrument_id=figi,
+                    quantity=1,
+                    direction=direction,
+                    account_id=account_id,
+                    order_type=OrderType.ORDER_TYPE_MARKET,
+                    order_id=str(uuid.uuid4()),
+                )
             
             order_id = response.order_id
             exec_status = response.execution_report_status
@@ -364,6 +425,11 @@ def place_order(signal: dict, figi: str, token: str, account_id: str, logger: lo
                 
                 # Выставляем SL и TP
                 place_stop_orders(client, figi, account_id, signal, exec_price, stop_direction, logger)
+                return True
+            elif limit_price and exec_status in [5, 6]:  # NEW or PENDING_NEW
+                logger.info(f"Лимитная заявка размещена и ожидает исполнения: order_id={order_id}, статус={exec_status}")
+                logger.info(f"Лимитная цена: {limit_price:.4f}")
+                # Для лимитной заявки не выставляем SL/TP сразу, так как она еще не исполнена
                 return True
             else:
                 logger.warning(f"Заявка не исполнилась мгновенно. Статус: {exec_status}")
@@ -506,6 +572,7 @@ def main():
     logger.info(
         f"Сигнал: {signal['signal']} | Confidence: {signal['confidence']}/100 | "
         f"SL: {signal['sl']} | TP: {signal['tp']} | R/R: {signal['rr']} | "
+        f"Прогноз profit: {signal.get('predicted_profit_pct', 0):+.2f}% | "
         f"Сессия: {'активна' if signal['session_ok'] else 'закрыта'}"
     )
     
@@ -516,7 +583,7 @@ def main():
         return
     
     logger.info(f"Проверка сигнала: OK (confidence={signal['confidence']} >= {MIN_CONFIDENCE}, "
-                f"R/R={signal['rr']} >= {MIN_RR_RATIO}, сессия активна)")
+                f"R/R={signal['rr']} >= {MIN_RR_RATIO}, profit>0.9%, сессия активна)")
     
     # Шаг 4: Получение токена и account_id
     token = os.getenv('INVEST_TOKEN')

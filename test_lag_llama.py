@@ -784,10 +784,16 @@ def main(ticker: str = None, return_signal: bool = False, logger: logging.Logger
 
     # Проверка R/R
     rr_ok = final_rr >= MIN_RR_RATIO
+    
+    # Проверка минимального прогнозного profit (не менее 0.9%)
+    ref_signal = tf_signals[ref_tf]
+    predicted_profit_pct = abs(ref_signal["move_pct"])
+    min_profit_threshold = 0.9  # Минимальный прогноз profit в %
+    profit_ok = predicted_profit_pct >= min_profit_threshold
 
     # Финальный вердикт
     confidence = round(weighted_score)
-    signal_ok  = (confidence >= MIN_CONFIDENCE) and rr_ok and session_ok
+    signal_ok  = (confidence >= MIN_CONFIDENCE) and rr_ok and session_ok and profit_ok
 
     # Определяем чистое направление для заявки
     if not signal_ok:
@@ -799,18 +805,21 @@ def main(ticker: str = None, return_signal: bool = False, logger: logging.Logger
             reasons.append(f"R/R {final_rr} < минимум {MIN_RR_RATIO}")
         if not session_ok:
             reasons.append("вне сессии")
+        if not profit_ok:
+            reasons.append(f"прогнозный profit {predicted_profit_pct:.2f}% < порог {min_profit_threshold}%")
         signal_text = f"НЕТ СИГНАЛА ({'; '.join(reasons)})"
     else:
         signal_direction = consensus_dir  # Чистое направление: LONG или SHORT
         agreement = "✓ все ТФ согласны" if all_same else "⚠ ТФ расходятся"
         signal_text = f"{consensus_dir} | {agreement}"
 
-    logger.info(f"\n  Направление:  {consensus_dir}")
-    logger.info(f"  Уверенность:  {confidence}/100")
-    logger.info(f"  Стоп-лосс:    {final_sl}")
-    logger.info(f"  Тейк-профит:  {final_tp}")
-    logger.info(f"  Risk/Reward:  {final_rr}")
-    logger.info(f"  Сессия:       {'активна' if session_ok else 'закрыта'}")
+    logger.info(f"\n  Направление:     {consensus_dir}")
+    logger.info(f"  Уверенность:     {confidence}/100")
+    logger.info(f"  Стоп-лосс:       {final_sl}")
+    logger.info(f"  Тейк-профит:     {final_tp}")
+    logger.info(f"  Risk/Reward:     {final_rr}")
+    logger.info(f"  Прогноз profit:  {predicted_profit_pct:+.2f}% (мин. {min_profit_threshold}%)")
+    logger.info(f"  Сессия:          {'активна' if session_ok else 'закрыта'}")
     logger.info(f"\n>>> {signal_text} <<<")
 
     # Детализация по таймфреймам
@@ -848,6 +857,7 @@ def main(ticker: str = None, return_signal: bool = False, logger: logging.Logger
         "rr":          final_rr,
         "session_ok":  session_ok,
         "timestamp":   timestamp,
+        "predicted_profit_pct": predicted_profit_pct,
         **{f"{tf}_score": s["score"] for tf, s in tf_signals.items()},
         **{f"{tf}_dir":   s["direction"] for tf, s in tf_signals.items()},
     }
@@ -867,7 +877,8 @@ def main(ticker: str = None, return_signal: bool = False, logger: logging.Logger
             "tp": final_tp,
             "rr": final_rr,
             "session_ok": session_ok,
-            "timestamp": timestamp
+            "timestamp": timestamp,
+            "predicted_profit_pct": predicted_profit_pct
         }
         return result
     
