@@ -162,7 +162,7 @@ def validate_signal(signal: dict) -> Tuple[bool, str]:
         return False, "Торговая сессия MOEX не активна"
     
     # Проверка 5: прогноз profit >= 0.9%
-    if signal.get("predicted_profit_pct", 0) < 0.9:
+    if signal.get("predicted_profit_pct", 0) < 0.4sngs:
         return False, f"Прогноз profit {signal.get('predicted_profit_pct', 0):.2f}% ниже минимума 0.9%"
     
     return True, "OK"

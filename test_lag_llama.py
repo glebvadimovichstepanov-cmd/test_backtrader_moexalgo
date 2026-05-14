@@ -61,7 +61,7 @@ torch.manual_seed(42)
 
 # ======================== НАСТРОЙКИ ========================
 
-TICKER        = "SNGS"
+#TICKER        = "SNGS"
 CACHE_DIR     = "cache_data"
 RESULTS_DIR   = "results"
 os.makedirs(CACHE_DIR, exist_ok=True)
@@ -70,7 +70,7 @@ os.makedirs(RESULTS_DIR, exist_ok=True)
 START_DATE = pd.Timestamp("2022-01-01")
 END_DATE   = pd.Timestamp("2026-06-01")
 
-PREDICTION_STEPS = 5
+PREDICTION_STEPS = 10
 CONTEXT_LENGTH   = 1092
 NUM_SAMPLES      = 200   # больше семплов = стабильнее квантили
 ENSEMBLE_RUNS    = 3     # запускаем модель N раз и усредняем (снижает шум)
