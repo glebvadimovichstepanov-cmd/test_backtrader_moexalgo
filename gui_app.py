@@ -429,22 +429,26 @@ class TradingGUI:
                 required_cols = ['open', 'high', 'low', 'close']
                 has_ohlcv = all(col in df.columns for col in required_cols)
                 
-                # Определение колонки времени
+                # Определение колонки времени и создание числовых позиций для свечей
                 time_col = 'time' if 'time' in df.columns else (df.columns[0] if len(df.columns) > 1 else None)
                 
                 if time_col:
                     x_values = df[time_col]
                     if pd.api.types.is_datetime64_any_dtype(x_values):
                         x_dates = x_values
+                        # Используем числовые позиции для отрисовки свечей
+                        x_positions = list(range(len(df)))
                     else:
                         x_dates = pd.to_datetime(x_values, errors='coerce')
+                        x_positions = list(range(len(df)))
                 else:
                     x_dates = range(len(df))
+                    x_positions = list(range(len(df)))
                 
                 # --- 1. Отрисовка исторических свечей ---
                 if has_ohlcv:
                     for idx, row in df.iterrows():
-                        t = x_dates.iloc[idx] if hasattr(x_dates, 'iloc') else x_dates[idx]
+                        t = x_positions[idx]  # Используем числовую позицию
                         o, h, l, c = row['open'], row['high'], row['low'], row['close']
                         
                         # Цвет свечи
@@ -463,12 +467,22 @@ class TradingGUI:
                     # Если нет OHLCV, рисуем просто линию цены
                     price_col = 'close' if 'close' in df.columns else df.columns[-1]
                     y_values = df[price_col].values
-                    self.ax.plot(x_dates, y_values, 'b-', linewidth=1.5, label='Цена')
+                    self.ax.plot(x_positions, y_values, 'b-', linewidth=1.5, label='Цена')
                 
-                # Последняя цена и время
+                # Последняя цена и позиция
                 last_idx = -1
-                last_time = x_dates.iloc[last_idx] if hasattr(x_dates, 'iloc') else x_dates[last_idx]
+                last_x = x_positions[last_idx]
                 last_close = df['close'].iloc[last_idx] if 'close' in df.columns else df.iloc[last_idx, -1]
+                
+                # Для подписей оси X используем даты
+                if hasattr(x_dates, '__len__') and len(x_dates) > 0:
+                    # Устанавливаем подписи дат только для некоторых меток
+                    step = max(1, len(x_dates) // 10)
+                    tick_positions = x_positions[::step]
+                    tick_labels = [x_dates[i].strftime('%H:%M') if hasattr(x_dates[i], 'strftime') else str(x_dates[i]) 
+                                   for i in range(0, len(x_dates), step)]
+                    self.ax.set_xticks(tick_positions)
+                    self.ax.set_xticklabels(tick_labels, rotation=45, ha='right')
                 
                 # --- 2. Отрисовка прогноза и уровней ---
                 entry_price = signal.get('entry_price', last_close)
@@ -477,18 +491,15 @@ class TradingGUI:
                 direction = signal.get('signal', signal.get('direction', ''))
                 confidence = signal.get('confidence', 0)
                 
-                # Прогнозируемая точка (сдвиг в будущее)
-                if hasattr(last_time, 'timestamp'):
-                    future_time = last_time + pd.Timedelta(minutes=15)  # Сдвиг на 1 бар (15 мин)
-                else:
-                    future_time = last_time + 1
+                # Прогнозируемая точка (сдвиг в будущее на 1 позицию)
+                future_x = last_x + 1
                 
                 if tp:
                     # Цвет TP
                     color_tp = '#26a69a' if direction == 'BUY' or direction == 'LONG' else '#ef5350'
                     self.ax.axhline(y=tp, color=color_tp, linestyle='--', linewidth=2, label=f'TP: {tp:.4f}')
                     # Область между входом и TP
-                    self.ax.fill_between([last_time, future_time], [entry_price, tp], alpha=0.15, color=color_tp)
+                    self.ax.fill_between([last_x, future_x], [entry_price, tp], alpha=0.15, color=color_tp)
                 
                 if sl:
                     # Цвет SL
@@ -496,16 +507,16 @@ class TradingGUI:
                     self.ax.axhline(y=sl, color=color_sl, linestyle='-.', linewidth=2, label=f'SL: {sl:.4f}')
                 
                 # Точка входа
-                self.ax.scatter(last_time, entry_price, color='blue', s=150, zorder=5, marker='*', 
+                self.ax.scatter(last_x, entry_price, color='blue', s=150, zorder=5, marker='*', 
                                label=f'Вход: {entry_price:.4f}')
                 
                 # Линия прогноза (от входа к TP)
                 if tp:
-                    self.ax.plot([last_time, future_time], [entry_price, tp], color='blue', 
+                    self.ax.plot([last_x, future_x], [entry_price, tp], color='blue', 
                                 linewidth=2, linestyle=':', alpha=0.7)
                     # Подпись прогноза
                     label_text = f"Прогноз ({direction})\nConf: {confidence:.1f}%"
-                    self.ax.text(future_time, tp, label_text, fontsize=9, ha='left',
+                    self.ax.text(future_x, tp, label_text, fontsize=9, ha='left',
                                 bbox=dict(facecolor='white', alpha=0.8, edgecolor='blue', boxstyle='round,pad=0.5'))
                 
                 # --- Оформление ---
@@ -522,10 +533,17 @@ class TradingGUI:
                     self.ax.xaxis.set_major_locator(mdates.AutoDateLocator())
                     plt.setp(self.ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
                 
+                # Автомасштабирование с отступами
+                self.ax.relim()
+                self.ax.autoscale_view(scalex=True, scaley=True)
+                self.ax.margins(x=0.02, y=0.05)  # 2% по X, 5% по Y
+                
                 self.fig.tight_layout()
             
             # Перерисовка
             self.canvas.draw_idle()
+            
+            self.logger.info(f"График обновлён: {len(df)} свечей, направление={direction}, TP={tp}, SL={sl}")
             
         except Exception as e:
             self.logger.error(f"Ошибка отрисовки графика: {e}")
