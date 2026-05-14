@@ -97,8 +97,8 @@ LAG_LLAMA_CHECKPOINT_PATH = None
 
 # Настройки устройства
 # Примечание: Если возникает ошибка CUDA, установите DEVICE = torch.device("cpu")
-DEVICE = torch.device("cpu")  # Принудительно CPU для совместимости
-# DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+#DEVICE = torch.device("cpu")  # Принудительно CPU для совместимости
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Устройство: {DEVICE}")
 
 # ======================== ЛОГИРОВАНИЕ ========================
