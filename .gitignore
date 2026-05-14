@@ -1,4 +1,1 @@
-```
-__pycache__/
-*.pyc
-```
+Nothing should be ignored based on the provided file changes, as only a Python source file (`gui_app.py`) was modified and no build artifacts, dependencies, or temporary files were included in the changes.
