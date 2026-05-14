@@ -118,6 +118,15 @@ def setup_logger() -> logging.Logger:
 
 def load_data_tf(ticker_name: str, start: pd.Timestamp, end: pd.Timestamp,
                  logger: logging.Logger) -> Optional[Dict[str, pd.DataFrame]]:
+    """
+    Загрузка данных с MOEX с использованием кэша и догрузкой недостающих свечей.
+    
+    Логика:
+    1. Проверяем наличие кэш-файла
+    2. Если есть — загружаем и проверяем диапазон дат
+    3. Если кэш устарел или его нет — догружаем недостающие периоды
+    4. Сохраняем обновлённый кэш
+    """
     tf_map = {"1D": "1d", "1H": "1h", "10T": "10min"}
     date_ranges = pd.date_range(start=start, end=end, freq="30D")
     ranges = [(date_ranges[i], date_ranges[i+1]) for i in range(len(date_ranges)-1)]
@@ -130,42 +139,93 @@ def load_data_tf(ticker_name: str, start: pd.Timestamp, end: pd.Timestamp,
             CACHE_DIR,
             f"{ticker_name}_{tf_name}_{start.strftime('%Y%m%d')}_{end.strftime('%Y%m%d')}.csv"
         )
+        
+        # Попытка загрузить из кэша
+        df_cached = None
         if os.path.exists(cache_file):
-            logger.info(f"[{tf_name}] Из кэша")
-            df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
-            if not df.empty:
-                dataframes[tf_name] = df
-                continue
-
+            try:
+                logger.info(f"[{tf_name}] Загрузка из кэша...")
+                df_cached = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+                if not df_cached.empty:
+                    # Проверяем актуальность кэша
+                    last_cached_date = df_cached.index.max()
+                    now = pd.Timestamp.now()
+                    cache_age_hours = (now - last_cached_date).total_seconds() / 3600
+                    
+                    # Для интрадей таймфреймов — кэш не старше 1 часа
+                    max_age = 1 if tf_name in ("10T", "1H") else 24
+                    
+                    if cache_age_hours < max_age and last_cached_date >= end:
+                        logger.info(f"[{tf_name}] Кэш актуален ({len(df_cached)} баров)")
+                        dataframes[tf_name] = df_cached
+                        continue
+                    else:
+                        logger.info(f"[{tf_name}] Кэш устарел (последняя запись: {last_cached_date}), догружаем...")
+                else:
+                    logger.warning(f"[{tf_name}] Кэш пуст, загружаем заново")
+            except Exception as e:
+                logger.warning(f"[{tf_name}] Ошибка чтения кэша: {e}")
+        
+        # Загрузка с MOEX
         logger.info(f"[{tf_name}] Загрузка с MOEX...")
         ticker = moexalgo.Ticker(ticker_name)
         chunk_dfs = []
-        for chunk_start, chunk_end in ranges:
-            try:
-                df_chunk = ticker.candles(
-                    start=chunk_start.strftime("%Y-%m-%d"),
-                    end=chunk_end.strftime("%Y-%m-%d"),
-                    period=tf_code
-                )
-                if df_chunk is not None and not df_chunk.empty:
-                    idx_col = "date" if "date" in df_chunk.columns else "begin"
-                    df_chunk = df_chunk.set_index(idx_col)
-                    df_chunk = df_chunk.rename(columns={
-                        "open": "Open", "high": "High", "low": "Low",
-                        "close": "Close", "volume": "Volume"
-                    })
-                    df_chunk.index = pd.to_datetime(df_chunk.index)
-                    chunk_dfs.append(df_chunk)
-            except Exception as e:
-                logger.warning(f"  Ошибка чанка [{tf_name}] {chunk_start}: {e}")
-
-        if not chunk_dfs:
+        
+        # Если есть кэш, определяем дату начала догрузки
+        if df_cached is not None and not df_cached.empty:
+            last_cached_date = df_cached.index.max()
+            # Начинаем загрузку с даты последнего кэша
+            ranges_to_load = [(s, e) for s, e in ranges if s >= last_cached_date]
+            if not ranges_to_load and last_cached_date < end:
+                # Добавляем последний диапазон если он частично покрыт
+                ranges_to_load = [(last_cached_date, end)]
+        else:
+            ranges_to_load = ranges
+        
+        if ranges_to_load:
+            for chunk_start, chunk_end in ranges_to_load:
+                try:
+                    df_chunk = ticker.candles(
+                        start=chunk_start.strftime("%Y-%m-%d"),
+                        end=chunk_end.strftime("%Y-%m-%d"),
+                        period=tf_code
+                    )
+                    if df_chunk is not None and not df_chunk.empty:
+                        idx_col = "date" if "date" in df_chunk.columns else "begin"
+                        df_chunk = df_chunk.set_index(idx_col)
+                        df_chunk = df_chunk.rename(columns={
+                            "open": "Open", "high": "High", "low": "Low",
+                            "close": "Close", "volume": "Volume"
+                        })
+                        df_chunk.index = pd.to_datetime(df_chunk.index)
+                        chunk_dfs.append(df_chunk)
+                        logger.debug(f"  [{tf_name}] Загружен чанк {chunk_start} - {chunk_end}: {len(df_chunk)} баров")
+                except Exception as e:
+                    logger.warning(f"  Ошибка чанка [{tf_name}] {chunk_start}: {e}")
+        else:
+            logger.debug(f"[{tf_name}] Все данные уже в кэше")
+        
+        # Объединяем кэш и новые данные
+        if chunk_dfs:
+            df_new = pd.concat(chunk_dfs).sort_index()
+            df_new = df_new[~df_new.index.duplicated(keep="first")]
+            
+            if df_cached is not None and not df_cached.empty:
+                # Удаляем дубликаты между кэшем и новыми данными
+                df_cached = df_cached[df_cached.index < df_new.index.min()]
+                df = pd.concat([df_cached, df_new]).sort_index()
+            else:
+                df = df_new
+            
+            # Сохраняем обновлённый кэш
+            df.to_csv(cache_file)
+            logger.info(f"[{tf_name}] Кэш обновлён: {len(df)} баров")
+        elif df_cached is not None and not df_cached.empty:
+            df = df_cached
+            logger.info(f"[{tf_name}] Используем кэш: {len(df)} баров")
+        else:
             logger.error(f"[{tf_name}] Нет данных")
             continue
-
-        df = pd.concat(chunk_dfs).sort_index()
-        df = df[~df.index.duplicated(keep="first")]
-        df.to_csv(cache_file)
 
         needed = ["Open", "High", "Low", "Close", "Volume"]
         df = df[needed].dropna()
@@ -173,7 +233,7 @@ def load_data_tf(ticker_name: str, start: pd.Timestamp, end: pd.Timestamp,
             df[col] = df[col].replace([np.inf, -np.inf], np.nan).ffill().bfill().clip(lower=0.01)
 
         dataframes[tf_name] = df
-        logger.info(f"[{tf_name}] {len(df)} баров")
+        logger.info(f"[{tf_name}] Итого: {len(df)} баров")
 
     return dataframes if dataframes else None
 
