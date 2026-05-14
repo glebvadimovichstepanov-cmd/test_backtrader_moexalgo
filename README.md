@@ -1,22 +1,370 @@
-# backtrader_moexalgo
+# Lag-Llama Trading System v2.0
 
-Интеграция MOEX API AlgoPack с [Backtrader](https://github.com/WISEPLAT/backtrader ).
-Этот код был написан для Хакатона [GO ALGO](https://goalgo.ru ) организатором которого выступает биржа [MOEX](https://www.moex.com/ru/algopack/about ).  
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![MOEX](https://img.shields.io/badge/MOEX-API-green.svg)](https://www.moex.com/ru/algopack/about)
 
-С помощью этой интеграции вы можете делать:
-- Тестирование вашей стратегии на исторических данных с биржи [MOEX](https://www.moex.com/ru/algopack/about ) + [Backtrader](https://github.com/WISEPLAT/backtrader )
-- Запускать торговые системы для автоматической торговли на бирже [MOEX](https://www.moex.com/ru/algopack/about ) + [Backtrader](https://github.com/WISEPLAT/backtrader )
-   - Для Live торговли вам необходимо установить дополнительные бесплатные библиотеки, например:
-     - брокер Финам: [MOEX](https://www.moex.com/ru/algopack/about) + [Backtrader](https://github.com/WISEPLAT/backtrader ) +  [FinamPy](https://github.com/cia76/FinamPy ) // Live торговля
-     - брокер Алор: [MOEX](https://www.moex.com/ru/algopack/about) + [Backtrader](https://github.com/WISEPLAT/backtrader ) +  [AlorPy](https://github.com/cia76/AlorPy ) // Live торговля
-     - для ЛЮБОГО брокера, у которого есть терминал Quik: [MOEX](https://www.moex.com/ru/algopack/about) + [Backtrader](https://github.com/WISEPLAT/backtrader ) +  [QuikPy](https://github.com/cia76/QuikPy ) // Live торговля
-- Загружать live, исторические данные и Super Candles с биржи [MOEX](https://www.moex.com/ru/algopack/about )
-- Создавать и тестировать свои торговые стратегии пользуясь возможностями библиотеки [Backtrader](https://github.com/WISEPLAT/backtrader )
-  - Много полезной документации о том, как делать стратегии есть [здесь](https://www.backtrader.com/docu/quickstart/quickstart/ ).
+## 📖 Описание
 
-Для подключения к API мы используем библиотеку [moexalgo](https://github.com/moexalgo/moexalgo).
+**Lag-Llama Trading System** — это комплексная система алгоритмической торговли, объединяющая:
 
-**Обучающее видео по работе с этой библиотекой можно посмотреть [на YouTube](https://youtu.be/SmcQF2jPxsQ ) и [на RuTube](https://rutube.ru/video/private/ba9e19f36c98d45ac9caf5b399dda6ca/?p=2T_4kwuwMz9aQAY3kFxYfQ )**
+1. **Модель Lag-Llama** — современная модель машинного обучения для прогнозирования временных рядов
+2. **MOEX API (moexalgo)** — получение биржевых данных с Московской Биржи
+3. **T-Invest API** — исполнение заявок через брокера Т-Банк
+4. **Графический интерфейс (GUI)** — удобное управление торговлей
+
+### Ключевые возможности
+
+✅ **Генерация торговых сигналов** на основе прогнозов модели Lag-Llama  
+✅ **Мультитаймфреймовый анализ** (10min, 1H, 1D) с весовыми коэффициентами  
+✅ **Фильтрация сигналов** по confidence, R/R ratio, прогнозу profit  
+✅ **Автоматическое выставление заявок** с Stop-Loss и Take-Profit  
+✅ **Графический интерфейс** для визуализации и управления  
+✅ **Логирование операций** в реальном времени  
+✅ **Поддержка Live-торговли** через T-Invest API
+
+---
+
+## 🚀 Быстрый старт
+
+### 1. Установка зависимостей
+
+```bash
+# Основные зависимости
+pip install numpy pandas torch moexalgo requests websockets matplotlib
+
+# Lag-Llama (опционально, для генерации сигналов)
+pip install git+https://github.com/time-series-foundation-models/lag-llama.git
+
+# T-Invest API (для Live-торговли)
+pip install t_tech.invest
+
+# Графический интерфейс (встроен в tkinter)
+# Для Ubuntu/Debian: sudo apt-get install python3-tk
+# Для Windows/macOS: входит в стандартную поставку Python
+```
+
+### 2. Настройка API токена
+
+Получите токен в личном кабинете T-Invest: https://t-invest.ru/settings/api
+
+```bash
+# Linux/macOS
+export INVEST_TOKEN='ваш_токен'
+
+# Windows (PowerShell)
+$env:INVEST_TOKEN='ваш_токен'
+
+# Windows (CMD)
+set INVEST_TOKEN=ваш_токен
+```
+
+### 3. Запуск
+
+#### Вариант A: Графический интерфейс (рекомендуется)
+
+```bash
+python gui_app.py
+```
+
+#### Вариант B: Консольный режим
+
+```bash
+python main.py
+```
+
+---
+
+## 📁 Структура проекта
+
+```
+/workspace/
+├── gui_app.py                 # Графический интерфейс (Tkinter)
+├── main.py                    # Основная логика интеграции
+├── test_lag_llama.py          # Модель Lag-Llama и генерация сигналов
+├── README.md                  # Документация
+├── backtrader_moexalgo/       # Интеграция с Backtrader
+│   ├── __init__.py
+│   ├── moexalgo_store.py
+│   └── moexalgo_feed.py
+├── DataExamplesMoexAlgo_ru/   # Примеры работы с данными MOEX
+├── StrategyExamplesMoexAlgo_ru/ # Примеры торговых стратегий
+└── my_config/                 # Примеры конфигурационных файлов
+```
+
+---
+
+## 🎯 Как это работает
+
+### Архитектура системы
+
+```
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│   Lag-Llama     │────▶│  Signal Generator │────▶│  Validation     │
+│   Model         │     │  (test_lag_llama) │     │  Filters        │
+└─────────────────┘     └──────────────────┘     └────────┬────────┘
+                                                          │
+                                                          ▼
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│   T-Invest API  │◀────│   Order Executor │◀────│   Signal OK?   │
+│   (Live Trade)  │     │   (main.py)      │     │   (Y/N)        │
+└─────────────────┘     └──────────────────┘     └─────────────────┘
+         ▲
+         │
+┌─────────────────┐
+│   GUI App       │
+│   (gui_app.py)  │
+└─────────────────┘
+```
+
+### Поток данных
+
+1. **Запрос тикера**: Пользователь вводит тикер инструмента (SNGS, SBER, etc.)
+2. **Загрузка данных**: Система загружает исторические данные с MOEX через moexalgo
+3. **Прогнозирование**: Lag-Llama генерирует прогноз на нескольких таймфреймах
+4. **Генерация сигнала**: Определяется направление (LONG/SHORT), SL, TP, confidence
+5. **Валидация**: Проверка по критериям (confidence ≥ 60%, R/R ≥ 1.5, profit ≥ 0.9%)
+6. **Исполнение**: Выставление заявки через T-Invest API с SL/TP
+
+---
+
+## ⚙️ Параметры и настройки
+
+### Параметры сигнала (в gui_app.py)
+
+| Параметр | Значение по умолчанию | Описание |
+|----------|----------------------|----------|
+| `MIN_CONFIDENCE` | 60% | Минимальная уверенность модели |
+| `MIN_RR_RATIO` | 1.5 | Минимальное соотношение риск/прибыль |
+| `MIN_PROFIT_PCT` | 0.9% | Минимальный прогнозируемый profit |
+| `ENSEMBLE_RUNS` | 3 | Количество запусков модели для усреднения |
+
+### Веса таймфреймов
+
+```python
+TF_WEIGHTS = {
+    "10T": 0.50,  # 10 минут (основной для интрадей)
+    "1H": 0.35,   # 1 час
+    "1D": 0.15    # 1 день
+}
+```
+
+### Торговая сессия MOEX
+
+Система автоматически проверяет активную сессию:
+- **Начало**: 10:30 MSK (не торгуем в первые 30 мин)
+- **Конец**: 18:30 MSK (не торгуем в последние 30 мин)
+
+---
+
+## 🖥️ Графический интерфейс
+
+### Основные компоненты
+
+1. **Панель управления** (слева)
+   - Поле ввода тикера
+   - Кнопка "📊 Получить сигнал"
+   - Кнопка "💰 Выставить заявку"
+   - Настройки параметров (Min Confidence, R/R, Profit)
+
+2. **Панель сигнала** (справа вверху)
+   - Тикер, направление, confidence
+   - Цена входа, Stop Loss, Take Profit
+   - R/R ratio, прогноз profit
+   - Статус валидности сигнала
+
+3. **Консоль логов** (справа внизу)
+   - Логи операций в реальном времени
+   - Цветовая индикация уровней (INFO/WARNING/ERROR)
+   - Возможность сохранения в файл
+
+### Скриншот интерфейса
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Lag-Llama Trading System v2.0                                  │
+├──────────────────────┬──────────────────────────────────────────┤
+│  Управление торговлей │  Текущий сигнал                         │
+│                      │                                          │
+│  Тикер: [SNGS____]   │  Тикер:        SNGS                     │
+│                      │  Направление:  LONG                     │
+│  [📊 Получить сигнал]│  Confidence:   75%                      │
+│                      │  Цена входа:   25.4500                  │
+│  [💰 Выставить заявку]│  Stop Loss:    24.8000                  │
+│                      │  Take Profit:  26.5000                  │
+│  Параметры сигнала:  │  R/R Ratio:    2.15                     │
+│  Min Confidence: 60  │  Прогноз:      +1.25%                   │
+│  Min R/R:      1.5   │  Статус:       ✅ Готов к торговле      │
+│  Min Profit:   0.9   │                                          │
+│                      ├──────────────────────────────────────────┤
+│                      │  Лог операций                            │
+│                      │  [10:45:32] INFO: Генерация сигнала...  │
+│                      │  [10:45:35] INFO: Сигнал получен        │
+│                      │  [10:45:36] SUCCESS: Валидация OK       │
+│                      │                                          │
+└──────────────────────┴──────────────────────────────────────────┘
+│  Готов к работе | Сессия: активна                                │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 📊 Примеры использования
+
+### Консольный режим
+
+```bash
+$ python main.py
+
+=== Интеграция Lag-Llama + T-Bank Live Trading ===
+
+Введите тикер инструмента (или 'exit' для выхода): SNGS
+
+[INFO] Запрошен тикер: SNGS
+[INFO] Генерация сигнала для SNGS...
+[INFO] Сигнал: LONG | Confidence: 75/100 | SL: 24.80 | TP: 26.50 | R/R: 2.15
+[INFO] Проверка сигнала: OK
+[INFO] Поиск FIGI для SNGS...
+[INFO] ✅ Найдено: SNGS (TQBR) -> BBG004MK7Z79
+[INFO] Заявка успешно выставлена!
+[INFO] SL и TP установлены.
+```
+
+### Программный вызов
+
+```python
+from main import generate_signal, validate_signal
+
+# Генерация сигнала
+signal = generate_signal("SNGS", logger)
+
+if signal:
+    is_valid, reason = validate_signal(signal)
+    
+    if is_valid:
+        print(f"✅ Сигнал валиден: {signal['signal']}")
+        print(f"   Confidence: {signal['confidence']}%")
+        print(f"   SL: {signal['sl']}, TP: {signal['tp']}")
+    else:
+        print(f"❌ Сигнал отклонён: {reason}")
+```
+
+---
+
+## 🔒 Безопасность
+
+### Рекомендации
+
+⚠️ **Важно**:
+- Не храните токен в коде или репозитории
+- Используйте переменные окружения для токена
+- Проверяйте параметры перед выставлением заявки
+- Тестируйте стратегию на демо-счете
+- Не используйте публичные компьютеры для торговли
+
+### Ограничения ответственности
+
+Программа предоставляется **"КАК ЕСТЬ"** (AS IS). Автор не несет ответственности за:
+- Финансовые потери при использовании
+- Убытки от ошибок в коде или данных
+- Последствия неправильной настройки
+
+Торговля на бирже связана с риском потери капитала.
+
+---
+
+## 🛠️ Расширение функционала
+
+### Добавление нового индикатора
+
+```python
+# В test_lag_llama.py добавьте:
+def calculate_custom_indicator(data: pd.DataFrame) -> pd.Series:
+    """Расчет пользовательского индикатора"""
+    # Ваша логика
+    return indicator_series
+```
+
+### Интеграция с другим брокером
+
+```python
+# Создайте файл broker_xxx.py по аналогии с main.py
+from xxx_api import Client
+
+def place_order_xxx(...):
+    # Логика выставления заявок для вашего брокера
+    pass
+```
+
+---
+
+## 📚 Дополнительные ресурсы
+
+### Документация
+
+- [Backtrader Documentation](https://www.backtrader.com/docu/)
+- [MOEX API Docs](https://github.com/moexalgo/moexalgo)
+- [T-Invest API](https://tinkoff.github.io/investAPI/)
+- [Lag-Llama Paper](https://arxiv.org/abs/2310.08239)
+
+### Видеоуроки
+
+- [YouTube: Работа с библиотекой](https://youtu.be/SmcQF2jPxsQ)
+- [RuTube: Начало работы](https://rutube.ru/video/private/ba9e19f36c98d45ac9caf5b399dda6ca/)
+
+### Примеры стратегий
+
+Смотрите папки:
+- `DataExamplesMoexAlgo_ru/` — работа с данными
+- `StrategyExamplesMoexAlgo_ru/` — торговые стратегии
+
+---
+
+## 🤝 Вклад в проект
+
+Приветствуются:
+- Pull Requests с улучшениями
+- Bug reports
+- Предложения по новым функциям
+- Документация и примеры
+
+```bash
+git clone https://github.com/WISEPLAT/backtrader_moexalgo
+cd backtrader_moexalgo
+git checkout -b feature/your-feature-name
+```
+
+---
+
+## 📄 Лицензия
+
+MIT License — см. файл [LICENSE](LICENSE)
+
+---
+
+## 📈 Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=WISEPLAT/backtrader_moexalgo&type=Timeline)](https://star-history.com/#WISEPLAT/backtrader_moexalgo&Timeline)
+
+---
+
+## 🙏 Благодарности
+
+- **Backtrader** — отличная библиотека для бэктестинга
+- **Команда MOEX** — за API moexalgo
+- **Игорь Чечета** — за библиотеки FinamPy, AlorPy, QuikPy
+- **Сообщество** — за вклад и поддержку
+
+---
+
+## 📞 Контакты
+
+- GitHub: [WISEPLAT](https://github.com/WISEPLAT)
+- Вопросы: создавайте Issue в репозитории
+
+---
+
+**Happy Trading! 📈💰**
 
 ## Установка
 1) Самый простой способ:
