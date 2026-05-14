@@ -886,8 +886,13 @@ def main(ticker: str = None, return_signal: bool = False, logger: logging.Logger
         # Формируем упрощённый dict для возврата с чистым направлением
         # Добавляем данные графика с последнего таймфрейма для визуализации
         chart_df = None
+        entry_price = 0.0
+        
         if data_dict and '15min' in data_dict:
             chart_data = data_dict['15min'].copy()
+            # Получаем цену входа (последняя цена закрытия)
+            entry_price = float(chart_data['Close'].iloc[-1])
+            
             # Преобразуем в нужный формат для GUI
             chart_df = pd.DataFrame({
                 'time': chart_data.index,
@@ -902,6 +907,7 @@ def main(ticker: str = None, return_signal: bool = False, logger: logging.Logger
             "ticker": TICKER,
             "signal": signal_direction,  # Чистое направление: LONG, SHORT или НЕТ СИГНАЛА
             "confidence": confidence,
+            "entry_price": entry_price,  # Цена входа для графика
             "sl": final_sl,
             "tp": final_tp,
             "rr": final_rr,
